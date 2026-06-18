@@ -1,0 +1,18 @@
+﻿{
+  "name": "Al-Azizi Lab — Management System",
+  "short_name": "Al-Azizi Lab",
+  "description": "Dental lab management system for orders, doctors, finance, and staff.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A1B3D",
+  "theme_color": "#0A1B3D",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='80' fill='%230A1B3D'/%3E%3Ctext y='370' x='256' text-anchor='middle' font-size='320' fill='%2300B4D8'%3EA%3C/text%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
