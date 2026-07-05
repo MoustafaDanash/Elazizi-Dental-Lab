@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
 <html lang="en" dir="ltr">
 <head>
 <meta charset="UTF-8"/>
@@ -194,6 +194,7 @@ tr:hover td{background:rgba(0,180,216,.03)}
 
   /* ── Stats ── */
   .stats-row{grid-template-columns:1fr 1fr !important;gap:8px !important;margin-bottom:14px !important;}
+  .ds-stats{grid-template-columns:1fr 1fr !important;gap:8px !important;}
   .fin-card,.stat-card,.salary-card{box-sizing:border-box;width:100%;}
 
   /* ── Forms ── */
@@ -580,7 +581,6 @@ tr:hover td{background:rgba(0,180,216,.03)}
 #dashboard-orders td, #dashboard-orders th {
   white-space: nowrap;
 }
-.table-wrap table { min-width: 100%; }
 
 /* ── NOTIFICATIONS ── */
 .notif-bell{
@@ -983,9 +983,13 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       <span>Users</span>
     </button>
-    <button class="sb-btn owner-manager-only" style="width:100%;display:none" onclick="nav('expenses',this)">
+    <button class="sb-btn expenses-nav-btn" style="width:100%;display:none" onclick="nav('expenses',this)">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
       <span>Expenses</span>
+    </button>
+    <button class="sb-btn expenses-nav-btn" style="width:100%;display:none" onclick="nav('reports',this)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-4"/></svg>
+      <span>Reports</span>
     </button>
     <button class="sb-btn owner-manager-only" style="width:100%;display:none" onclick="nav('salaries',this)">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
@@ -1551,6 +1555,39 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
       <div class="fin-card"><h3>📋 Sessions</h3><div id="scan-list"></div></div>
     </div>
 
+    <!-- REPORTS -->
+    <div class="page" id="page-reports">
+      <div class="sec-hdr">
+        <h2>Financial <span>Reports</span></h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="rep-period-type" onchange="populateReportPeriods()" style="padding:7px 12px;border:1px solid var(--border);border-radius:9px;font-size:.78rem;outline:none;background:var(--off)">
+            <option value="month">Monthly</option>
+            <option value="quarter">Quarterly</option>
+            <option value="year">Yearly</option>
+          </select>
+          <select id="rep-period-value" onchange="renderReports()" style="padding:7px 12px;border:1px solid var(--border);border-radius:9px;font-size:.78rem;outline:none;background:var(--off);min-width:160px"></select>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:16px" id="rep-div-tabs">
+        <button class="rep-div-tab" data-div="Overall" onclick="setReportDivision('Overall')" style="padding:7px 16px;border-radius:20px;border:1px solid var(--border);font-size:.78rem;font-weight:600;cursor:pointer">Overall</button>
+        <button class="rep-div-tab" data-div="Porcelain" onclick="setReportDivision('Porcelain')" style="padding:7px 16px;border-radius:20px;border:1px solid var(--border);font-size:.78rem;font-weight:600;cursor:pointer">🦷 Porcelain</button>
+        <button class="rep-div-tab" data-div="Zirconia" onclick="setReportDivision('Zirconia')" style="padding:7px 16px;border-radius:20px;border:1px solid var(--border);font-size:.78rem;font-weight:600;cursor:pointer">⬜ Zirconia</button>
+      </div>
+
+      <div class="stats-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:16px">
+        <div class="stat-card cyan"><div class="stat-icon cyan"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 1 0 0 7h5a3.5 3.5 0 1 1 0 7H6"/></svg></div><div><div class="stat-label">Invoiced Revenue</div><div class="stat-value" id="rep-invoiced">0 EGP</div><div class="stat-sub">total billed</div></div></div>
+        <div class="stat-card green"><div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div><div><div class="stat-label">Collected</div><div class="stat-value" id="rep-paid">0 EGP</div><div class="stat-sub">actually paid</div></div></div>
+        <div class="stat-card" style="border-color:rgba(255,76,106,.2)"><div class="stat-icon" style="background:rgba(255,76,106,.12);color:#FF4C6A"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 1 0 0 7h5a3.5 3.5 0 1 1 0 7H6"/></svg></div><div><div class="stat-label">Total Expenses</div><div class="stat-value" id="rep-expenses">0 EGP</div><div class="stat-sub"><span id="rep-op-expenses">0 EGP</span> op + <span id="rep-salary-expenses">0 EGP</span> salary</div></div></div>
+        <div class="stat-card gold"><div class="stat-icon gold"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div><div><div class="stat-label">Net Profit</div><div class="stat-value" id="rep-net">0 EGP</div><div class="stat-sub">collected minus expenses</div></div></div>
+      </div>
+
+      <div class="fin-card">
+        <h3>📊 Revenue &amp; Expenses by Division</h3>
+        <div id="rep-breakdown"></div>
+      </div>
+    </div>
+
   </div>
 
 
@@ -1660,7 +1697,7 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
       </div>
       <div class="form-group">
         <label>Units</label>
-        <input id="o-units" type="number" min="1" value="1"/>
+        <input id="o-units" type="number" min="1" value="1" oninput="recalcOrderPrice()"/>
       </div>
       <div class="form-group">
         <label>Price (EGP)</label>
@@ -2024,6 +2061,14 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
       <div class="form-group">
         <label>Monthly Salary (EGP)</label>
         <input id="u-salary" type="number" min="0" placeholder="0"/>
+      </div>
+      <div class="form-group">
+        <label>Division <span style="font-size:.65rem;color:var(--gray)">(for salary reports)</span></label>
+        <select id="u-division">
+          <option value="">Shared (Both Divisions)</option>
+          <option value="Porcelain">Porcelain (Haitham)</option>
+          <option value="Zirconia">Zirconia (Mostafa)</option>
+        </select>
       </div>
       <div class="form-group form-full">
         <label>Role Description</label>
@@ -3581,6 +3626,147 @@ function deleteExpense(id){
   renderExpenses();
 }
 
+// ── REPORTS ───────────────────────────────────────────────────────────────
+let currentReportDivision = 'Overall';
+
+function dateInPeriod(dateStr, type, value){
+  if(!dateStr || !value) return false;
+  if(type==='month') return dateStr.slice(0,7)===value;
+  if(type==='year')  return dateStr.slice(0,4)===value;
+  if(type==='quarter'){
+    const parts = value.split('-Q');
+    const y = parts[0], q = Number(parts[1]);
+    const dy = dateStr.slice(0,4), dmo = Number(dateStr.slice(5,7));
+    if(!dmo) return false;
+    const dq = Math.ceil(dmo/3);
+    return dy===y && dq===q;
+  }
+  return false;
+}
+
+function populateReportPeriods(){
+  const type = document.getElementById('rep-period-type')?.value || 'month';
+  const dates = [];
+  state.orders.forEach(function(o){ if(o.service!=='Opening Balance' && o.createdAt) dates.push(o.createdAt.slice(0,10)); });
+  loadExpenses().forEach(function(e){ if(e.date) dates.push(e.date); });
+  loadSalaryHistory().forEach(function(h){ if(h.month) dates.push(h.month+'-01'); });
+  if(!dates.length) dates.push(today());
+
+  const sel = document.getElementById('rep-period-value');
+  if(!sel) return;
+  let opts = [];
+  if(type==='month'){
+    const set = {};
+    dates.forEach(function(d){ set[d.slice(0,7)]=true; });
+    opts = Object.keys(set).sort().reverse();
+    sel.innerHTML = opts.map(function(m){
+      const label = new Date(m+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+      return '<option value="'+m+'">'+label+'</option>';
+    }).join('');
+  } else if(type==='quarter'){
+    const set = {};
+    dates.forEach(function(d){
+      const y=d.slice(0,4), mo=Number(d.slice(5,7));
+      if(!mo) return;
+      const q=Math.ceil(mo/3);
+      set[y+'-Q'+q]=true;
+    });
+    opts = Object.keys(set).sort().reverse();
+    sel.innerHTML = opts.map(function(q){ return '<option value="'+q+'">'+q.replace('-Q',' — Q')+'</option>'; }).join('');
+  } else {
+    const set = {};
+    dates.forEach(function(d){ set[d.slice(0,4)]=true; });
+    opts = Object.keys(set).sort().reverse();
+    sel.innerHTML = opts.map(function(y){ return '<option value="'+y+'">'+y+'</option>'; }).join('');
+  }
+  setReportDivision(currentReportDivision);
+}
+
+function setReportDivision(div){
+  currentReportDivision = div;
+  document.querySelectorAll('.rep-div-tab').forEach(function(b){
+    const active = b.dataset.div===div;
+    b.classList.toggle('active', active);
+    b.style.background = active ? 'var(--navy)' : 'var(--off)';
+    b.style.color = active ? '#fff' : 'var(--navy)';
+  });
+  renderReports();
+}
+
+function computeReportNumbers(type, value, div){
+  const orders = state.orders.filter(function(o){
+    return o.service!=='Opening Balance' && dateInPeriod((o.createdAt||'').slice(0,10), type, value);
+  });
+  const filteredOrders = div==='Overall' ? orders : orders.filter(function(o){ return o.division===div; });
+  const invoiced = filteredOrders.reduce(function(s,o){ return s+Number(o.price||0); },0);
+  const paid     = filteredOrders.reduce(function(s,o){ return s+Number(o.paid||0); },0);
+
+  const expenses = loadExpenses().filter(function(e){
+    return e.type==='expense' && dateInPeriod(e.date, type, value);
+  });
+  const filteredExpenses = div==='Overall' ? expenses : expenses.filter(function(e){ return e.expenseDivision===div; });
+  const opExpenses = filteredExpenses.reduce(function(s,e){ return s+Number(e.amount||0); },0);
+
+  let salaryExpenses = 0;
+  loadSalaryHistory().forEach(function(h){
+    if(!dateInPeriod(h.month+'-01', type, value)) return;
+    const u = state.users.find(function(x){ return x.id===h.userId; });
+    const amt = Number(h.amount||0);
+    if(div==='Overall') salaryExpenses += amt;
+    else if(u && u.division===div) salaryExpenses += amt;
+    else if(!u || !u.division) salaryExpenses += amt*0.5;
+  });
+
+  const totalExpenses = opExpenses + salaryExpenses;
+  return { invoiced, paid, opExpenses, salaryExpenses, totalExpenses, netProfit: paid-totalExpenses };
+}
+
+function renderReports(){
+  const type  = document.getElementById('rep-period-type')?.value || 'month';
+  const value = document.getElementById('rep-period-value')?.value;
+  if(!value) return;
+
+  const r = computeReportNumbers(type, value, currentReportDivision);
+  document.getElementById('rep-invoiced').textContent = fmt(r.invoiced)+' EGP';
+  document.getElementById('rep-paid').textContent = fmt(r.paid)+' EGP';
+  document.getElementById('rep-expenses').textContent = fmt(r.totalExpenses)+' EGP';
+  document.getElementById('rep-op-expenses').textContent = fmt(r.opExpenses)+' EGP';
+  document.getElementById('rep-salary-expenses').textContent = fmt(r.salaryExpenses)+' EGP';
+  const netEl = document.getElementById('rep-net');
+  netEl.textContent = fmt(r.netProfit)+' EGP';
+  netEl.style.color = r.netProfit>=0 ? 'var(--green)' : '#FF4C6A';
+
+  renderReportBreakdown(type, value);
+}
+
+function renderReportBreakdown(type, value){
+  const el = document.getElementById('rep-breakdown');
+  if(!el) return;
+  const divs = ['Porcelain','Zirconia'];
+  const rows = divs.map(function(d){ return Object.assign({div:d}, computeReportNumbers(type, value, d)); });
+  const overall = computeReportNumbers(type, value, 'Overall');
+  const icon = { Porcelain:'🦷', Zirconia:'⬜' };
+  el.innerHTML = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.78rem">'
+    +'<thead><tr style="text-align:left;border-bottom:1px solid var(--border)">'
+      +'<th style="padding:6px 8px">Division</th><th style="padding:6px 8px">Invoiced</th><th style="padding:6px 8px">Collected</th><th style="padding:6px 8px">Expenses</th><th style="padding:6px 8px">Net</th></tr></thead><tbody>'
+    +rows.map(function(r){
+      const netColor = r.netProfit>=0 ? 'var(--green)' : '#FF4C6A';
+      return '<tr style="border-bottom:1px solid var(--border)">'
+        +'<td style="padding:6px 8px;font-weight:600">'+icon[r.div]+' '+r.div+'</td>'
+        +'<td style="padding:6px 8px">'+fmt(r.invoiced)+' EGP</td>'
+        +'<td style="padding:6px 8px">'+fmt(r.paid)+' EGP</td>'
+        +'<td style="padding:6px 8px">'+fmt(r.totalExpenses)+' EGP</td>'
+        +'<td style="padding:6px 8px;font-weight:700;color:'+netColor+'">'+fmt(r.netProfit)+' EGP</td></tr>';
+    }).join('')
+    +'<tr><td style="padding:6px 8px;font-weight:700">🏢 Overall</td>'
+      +'<td style="padding:6px 8px;font-weight:700">'+fmt(overall.invoiced)+' EGP</td>'
+      +'<td style="padding:6px 8px;font-weight:700">'+fmt(overall.paid)+' EGP</td>'
+      +'<td style="padding:6px 8px;font-weight:700">'+fmt(overall.totalExpenses)+' EGP</td>'
+      +'<td style="padding:6px 8px;font-weight:700;color:'+(overall.netProfit>=0?'var(--green)':'#FF4C6A')+'">'+fmt(overall.netProfit)+' EGP</td></tr>'
+    +'</tbody></table></div>'
+    +'<div style="font-size:.65rem;color:var(--gray);margin-top:8px">Shared employees (no division set) count fully toward Overall and split 50/50 between Porcelain and Zirconia.</div>';
+}
+
 
 
 // ── GLOBAL SESSION ──
@@ -3603,7 +3789,8 @@ let payingDoctorName = null;
 // ── STORAGE ───────────────────────────────────────────────────────────────
 function save(){
   try{ localStorage.setItem('alazizi_lab',JSON.stringify(state)); } catch(e){}
-  if(SB_ONLINE) syncToSupabase().catch(()=>{});
+  if(SB_ONLINE) return syncToSupabase();
+  return Promise.resolve();
 }
 function load(){
   try{
@@ -3623,6 +3810,7 @@ const titles = {
   referrals:'Staff <span>Commissions</span>',
   salaries:'Staff <span>Salaries</span>',
   expenses:'Expenses &amp; <span>Income</span>',
+  reports:'Financial <span>Reports</span>',
   delivery:'🚚 Delivery <span>Queue</span>'
 };
 function nav(page, btn){
@@ -3644,6 +3832,7 @@ function renderPage(page){
   else if(page==='referrals') renderReferrals();
   else if(page==='salaries') renderSalaries();
   else if(page==='expenses') renderExpenses();
+  else if(page==='reports') populateReportPeriods();
   else if(page==='delivery') renderDelivery();
 }
 
@@ -3747,6 +3936,7 @@ function renderOrders(){
           <button class="btn btn-ghost btn-sm" onclick="printOrder('${o.id}')" title="Print">🖨️</button>
           <button class="btn btn-ghost btn-sm" onclick="editOrder('${o.id}')">✏️</button>
           <button class="btn btn-sm" style="background:rgba(0,180,216,.1);color:var(--cyan);border:1px solid rgba(0,180,216,.2);font-size:.62rem" onclick="printWorkOrder('${o.id}')">🖨️</button>
+          <button class="btn btn-sm" style="background:rgba(37,211,102,.1);color:#25D366;border:1px solid rgba(37,211,102,.25);font-size:.62rem" onclick="sendWorkOrderWhatsApp('${o.id}')" title="Send order and bill via WhatsApp">WA</button>
           <button class="btn btn-red btn-sm" onclick="deleteOrder('${o.id}')">🗑️</button>
         </div>
       </td>
@@ -4019,7 +4209,7 @@ function editOrder(id){
   if(o.isRemake) onRemakeToggle();
   openModal('order-modal');
 }
-function saveOrder(){
+async function saveOrder(){
   const doctor=document.getElementById('o-doctor').value;
   const service=document.getElementById('o-service').value;
   if(!doctor||!service){ alert('Doctor and Service are required.'); return; }
@@ -4090,7 +4280,14 @@ function saveOrder(){
       );
     }
   }
-  save(); closeModal('order-modal');
+  var saveBtn = document.querySelector('#order-modal .btn-primary');
+  var saveBtnLabel = saveBtn ? saveBtn.textContent : '';
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+  try{
+    await Promise.race([save(), new Promise(function(res){ setTimeout(res, 8000); })]);
+  } catch(e){}
+  if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = saveBtnLabel; }
+  closeModal('order-modal');
   renderOrders(); renderDashboard();
 }
 function deleteOrder(id){
@@ -4425,6 +4622,9 @@ testSupabase().then(async function(){
     var indicator = document.getElementById('login-error');
     if(indicator) indicator.textContent = 'Connecting to cloud...';
     try{
+      if(localStorage.getItem('alazizi_sync_pending')==='1'){
+        try{ await syncToSupabase(); } catch(e){}
+      }
       var timeoutP = new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('timeout')); }, 12000); });
       var loaded = await Promise.race([loadFromSupabase(), timeoutP]);
       if(loaded){
@@ -4764,164 +4964,12 @@ function sendBillWhatsApp(){
   if(!currentBillDoctor) return;
   const phone = (currentBillDoctor.whatsapp||currentBillDoctor.phone||'').replace(/[^0-9]/g,'');
   if(!phone){ alert('No WhatsApp number for this doctor.'); return; }
-  // Generate PDF then open WhatsApp
-  generateBillPDF(function(pdfGenerated){
-    const text = buildBillText ? buildBillText() : ('Bill for Dr. '+currentBillDoctor.name);
-    window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(text),'_blank');
-    if(pdfGenerated){
-      showToast('PDF saved + WhatsApp opened. Attach the PDF manually.','done');
-    }
-  });
+  printBillDirect();
+  const text = buildBillText ? buildBillText() : ('Bill for Dr. '+currentBillDoctor.name);
+  window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(text),'_blank');
+  showToast('Statement opened - use Print, Save as PDF, then attach it in WhatsApp.','done');
 }
 
-function generateBillPDF(callback){
-  if(!currentBillDoctor){ if(callback) callback(false); return; }
-  if(typeof window.jspdf === 'undefined' && typeof jsPDF === 'undefined'){
-    // jsPDF not loaded - fallback to print
-    showToast('PDF library loading... try Print instead','info');
-    if(callback) callback(false);
-    return;
-  }
-  try{
-    const { jsPDF } = window.jspdf || { jsPDF: window.jsPDF };
-    const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
-    const d   = currentBillDoctor;
-    if(!d){ if(callback) callback(false); return; }
-    const now = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
-    const allOrders  = state.orders.filter(function(o){ return o.doctor===d.name; });
-    const outstanding = allOrders.filter(function(o){ return o.payment!=='Paid'; });
-    const allInvoiced = allOrders.reduce(function(s,o){ return s+Number(o.price||0); },0);
-    const allPaid     = allOrders.reduce(function(s,o){ return s+Number(o.paid||0); },0);
-    const allDue      = allInvoiced - allPaid;
-
-    // Colors
-    const navy  = [15, 23, 42];
-    const cyan  = [0, 180, 216];
-    const gray  = [100, 116, 139];
-    const green = [0, 200, 150];
-    const red   = [255, 76, 106];
-    const white = [255,255,255];
-
-    // Header background
-    doc.setFillColor(...navy);
-    doc.rect(0, 0, 210, 35, 'F');
-
-    // Lab name
-    doc.setTextColor(...white);
-    doc.setFontSize(16);
-    doc.setFont('helvetica','bold');
-    doc.text('Al-Azizi Dental Lab', 14, 14);
-    doc.setFontSize(8);
-    doc.setFont('helvetica','normal');
-    doc.text('Damanhour, Egypt  |  +20 120 360 5552', 14, 20);
-
-    // Date + term top right
-    doc.setFontSize(8);
-    doc.text('Date: '+now, 140, 12);
-    doc.text('Term: '+(d.term||'On Delivery'), 140, 18);
-
-    // Bill To
-    doc.setTextColor(...cyan);
-    doc.setFontSize(7);
-    doc.text('BILL TO', 14, 30);
-    doc.setTextColor(...white);
-    doc.setFontSize(10);
-    doc.setFont('helvetica','bold');
-    doc.text('Dr. '+d.name, 14, 35);
-
-    let y = 44;
-
-    // Account Summary box
-    doc.setFillColor(240,249,255);
-    doc.roundedRect(14, y, 182, 20, 2, 2, 'F');
-    doc.setTextColor(...gray);
-    doc.setFontSize(7);
-    doc.setFont('helvetica','normal');
-    doc.text('TOTAL INVOICED', 28, y+6);
-    doc.text('TOTAL PAID', 89, y+6);
-    doc.text('OUTSTANDING', 150, y+6);
-    doc.setFontSize(10);
-    doc.setFont('helvetica','bold');
-    doc.setTextColor(...navy);
-    doc.text(fmt(allInvoiced)+' EGP', 28, y+14);
-    doc.setTextColor(...green);
-    doc.text(fmt(allPaid)+' EGP', 89, y+14);
-    doc.setTextColor(allDue>0?red[0]:green[0], allDue>0?red[1]:green[1], allDue>0?red[2]:green[2]);
-    doc.text(fmt(allDue)+' EGP', 150, y+14);
-
-    y += 28;
-
-    // Outstanding orders table header
-    doc.setFillColor(...navy);
-    doc.rect(14, y, 182, 7, 'F');
-    doc.setTextColor(...white);
-    doc.setFontSize(7);
-    doc.setFont('helvetica','bold');
-    doc.text('#', 16, y+5);
-    doc.text('Service', 24, y+5);
-    doc.text('Patient', 80, y+5);
-    doc.text('Date', 120, y+5);
-    doc.text('Price', 145, y+5);
-    doc.text('Paid', 163, y+5);
-    doc.text('Due', 181, y+5);
-    y += 7;
-
-    doc.setFont('helvetica','normal');
-    doc.setFontSize(7);
-    outstanding.forEach(function(o, i){
-      if(y > 240){ doc.addPage(); y = 20; }
-      var due = Number(o.price||0)-Number(o.paid||0);
-      var bg  = i%2===0 ? [255,255,255] : [248,250,252];
-      doc.setFillColor(...bg);
-      doc.rect(14, y, 182, 7, 'F');
-      doc.setTextColor(...navy);
-      doc.text(String(o.orderNum||i+1), 16, y+5);
-      doc.text((o.service||'').substring(0,22), 24, y+5);
-      doc.text((o.patient||'—').substring(0,18), 80, y+5);
-      var dateStr = o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short'}) : (o.due||'—');
-      doc.text(dateStr, 120, y+5);
-      doc.text(fmt(o.price), 145, y+5);
-      doc.setTextColor(...green);
-      doc.text(fmt(o.paid||0), 163, y+5);
-      doc.setTextColor(...red);
-      doc.text(fmt(due), 181, y+5);
-      y += 7;
-    });
-
-    // Totals row
-    var subtotal = outstanding.reduce(function(s,o){ return s+Number(o.price||0); },0);
-    var totPaid  = outstanding.reduce(function(s,o){ return s+Number(o.paid||0); },0);
-    var totDue   = subtotal - totPaid;
-
-    doc.setFillColor(240, 249, 255);
-    doc.rect(14, y, 182, 8, 'F');
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(8);
-    doc.setTextColor(...navy);
-    doc.text('TOTAL DUE', 100, y+6);
-    doc.setTextColor(...red);
-    doc.text(fmt(totDue)+' EGP', 163, y+6);
-    y += 16;
-
-    // Footer
-    doc.setDrawColor(...gray);
-    doc.setLineWidth(0.3);
-    doc.line(14, y, 196, y);
-    y += 5;
-    doc.setTextColor(...gray);
-    doc.setFontSize(7);
-    doc.setFont('helvetica','normal');
-    doc.text('Al-Azizi Dental Lab  |  Damanhour, Egypt  |  +20 120 360 5552', 105, y, {align:'center'});
-
-    // Save PDF
-    var filename = 'Bill-Dr-'+d.name.replace(/[^a-zA-Z0-9]/g,'-')+'-'+now.replace(/ /g,'-')+'.pdf';
-    doc.save(filename);
-    if(callback) callback(true);
-  } catch(e){
-    console.error('PDF error:', e);
-    if(callback) callback(false);
-  }
-}
 
 function copyBillText(){
   const text = buildBillText();
@@ -4988,6 +5036,10 @@ function applyRoleRestrictions(){
   });
   document.querySelectorAll('.owner-manager-only').forEach(el=>{
     el.style.display = (role==='owner'||role==='manager')?'':'none';
+  });
+  // Expenses nav: owner/manager always, or anyone granted Finance Access
+  document.querySelectorAll('.expenses-nav-btn').forEach(el=>{
+    el.style.display = (role==='owner'||role==='manager'||perms.finance)?'':'none';
   });
   // Scanning: lab technicians can also access
   document.querySelectorAll('.scan-nav-btn').forEach(function(el){
@@ -5140,6 +5192,7 @@ function openNewUser(){
   editingUserId=null;
   document.getElementById('user-modal-title').textContent='Add User';
   ['u-name','u-username','u-password','u-salary'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('u-division').value='';
   document.getElementById('u-role').value='employee';
   filterRoleOptions();
   setPermCheckboxes(getDefaultPerms('employee'));
@@ -5160,6 +5213,7 @@ function editUser(id){
   document.getElementById('u-password').value=u.password;
   document.getElementById('u-role').value=u.role;
   document.getElementById('u-salary').value=u.salary||0;
+  document.getElementById('u-division').value=u.division||'';
   filterRoleOptions();
   // Load saved custom perms or role defaults
   const permsToLoad = u.customPerms || getDefaultPerms(u.role);
@@ -5201,9 +5255,10 @@ function saveUser(){
   // Check if perms differ from role default
   const isCustom = PERM_KEYS.some(k => !!checkedPerms[k] !== !!defaultPerms[k]);
   const salary = Number(document.getElementById('u-salary')?.value||0);
+  const division = document.getElementById('u-division')?.value||'';
   const data={
     id:editingUserId||uid(),
-    name, username, password, role, salary,
+    name, username, password, role, salary, division,
     customPerms: isCustom ? checkedPerms : null
   };
   if(editingUserId){
@@ -6066,6 +6121,7 @@ function setDoctorDivision(val){
 async function syncToSupabase(){
   if(!SB_ONLINE) return;
   try{
+    localStorage.setItem('alazizi_sync_pending','1');
     var blob = {
       id: 'alazizi-main',
       data: JSON.stringify({
@@ -6085,6 +6141,7 @@ async function syncToSupabase(){
       updated_at: new Date().toISOString()
     };
     await sbUpsert('app_state', blob, 'id');
+    localStorage.removeItem('alazizi_sync_pending');
     console.log('Synced to Supabase');
   } catch(e){ console.error('Sync error:', e.message); }
 }
@@ -6442,14 +6499,14 @@ function globalSearch(q){
         || String(o.orderNum||'').includes(ql);
   }).slice(0,5).forEach(function(o){
     hits.push({icon:'📋', title:'#'+(o.orderNum||'?')+' — '+o.service,
-               sub: o.doctor+(o.patient?' · '+o.patient:''), page:'orders'});
+               sub: o.doctor+(o.patient?' · '+o.patient:''), page:'orders', orderDoctor:o.doctor});
   });
 
   state.doctors.filter(function(d){
     return (d.name||'').toLowerCase().includes(ql)
         || (d.clinic||'').toLowerCase().includes(ql);
   }).slice(0,3).forEach(function(d){
-    hits.push({icon:'👨‍⚕️', title: d.name, sub: d.clinic||d.phone||'', page:'doctors'});
+    hits.push({icon:'👨‍⚕️', title: d.name, sub: d.clinic||d.phone||'', page:'doctors', doctorName:d.name});
   });
 
   if(!hits.length){
@@ -6465,13 +6522,22 @@ function globalSearch(q){
       + '<div style="font-size:.65rem;color:var(--gray)">'+r.sub+'</div></div>'
       + '</div>';
   }).join('');
-  el.querySelectorAll('.sr-item').forEach(function(item){
+  el.querySelectorAll('.sr-item').forEach(function(item, idx){
     item.addEventListener('click', function(){
-      var p = this.dataset.page;
+      var hit = hits[idx];
+      var p = hit.page;
       var btn = document.querySelector('.sb-btn[onclick*="'+p+'"]');
       if(btn) nav(p, btn);
       document.getElementById('global-search').value = '';
       el.style.display = 'none';
+      if(hit.page==='doctors' && hit.doctorName){
+        setTimeout(function(){ openBill(hit.doctorName); }, 60);
+      } else if(hit.page==='orders' && hit.orderDoctor){
+        setTimeout(function(){
+          var filterSel = document.getElementById('filter-doctor');
+          if(filterSel){ filterSel.value = hit.orderDoctor; renderOrders(); }
+        }, 60);
+      }
     });
   });
 }
@@ -7181,15 +7247,24 @@ function autoSetDurationFromService(){
   var item = state.pricelist.find(function(p){ return p.name===svc; });
   if(!item) return;
   if(item.days){ var durEl = document.getElementById('o-duration'); if(durEl){ durEl.value = String(item.days); autoSetDueDate(); } }
+  recalcOrderPrice();
+}
+
+function recalcOrderPrice(){
+  var svc = document.getElementById('o-service')?.value;
+  if(!svc || !state.pricelist) return;
+  var item = state.pricelist.find(function(p){ return p.name===svc; });
+  if(!item) return;
   // Auto-fill price from doctor custom pricing or standard price
   var doc = document.getElementById('o-doctor')?.value;
   var doctor = doc ? state.doctors.find(function(d){ return d.name===doc; }) : null;
   var customPrice = doctor&&doctor.customPricing&&doctor.customPricing[item.id]!==undefined ? doctor.customPricing[item.id] : null;
   var price = customPrice!==null ? customPrice : item.price;
   var priceEl = document.getElementById('o-price');
-  if(priceEl && price) priceEl.value = price;
   var unitEl = document.getElementById('o-units');
-  if(unitEl && item.unit==='per unit' && Number(unitEl.value)>1) priceEl.value = price * Number(unitEl.value);
+  var units = Number(unitEl?.value||1);
+  if(item.unit==='per unit' && units>1) price = price * units;
+  if(priceEl && price) priceEl.value = price;
 }
 
 // ── CHECK EXCEEDED ORDERS & NOTIFY ────────────────────────────────────────
@@ -7351,12 +7426,85 @@ function printWorkOrder(orderId){
 }
 
 // ── SEND WORK ORDER VIA WHATSAPP ───────────────────────────────────────────
+// -- ORDER RECEIPT PDF --
+function generateOrderReceiptPDF(orderId, callback){
+  var o = state.orders.find(function(x){ return x.id===orderId; });
+  if(!o){ if(callback) callback(false); return; }
+  var now = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  var due = Number(o.price||0)-Number(o.paid||0);
+
+  var html_out = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+    + '<title>Receipt - Order #'+o.orderNum+'</title>'
+    + '<style>'
+    + '@page{size:A5;margin:8mm}'
+    + 'body{font-family:Arial,sans-serif;font-size:9pt;color:#0F172A;margin:0;padding:0}'
+    + '.wrap{border:2px solid #0F172A;border-radius:6px;overflow:hidden}'
+    + '.hdr{background:#0F172A;color:#fff;padding:8px 12px;display:flex;justify-content:space-between;align-items:center}'
+    + '.hdr-lab{font-size:11pt;font-weight:800}'
+    + '.hdr-sub{font-size:7pt;color:#94A3B8;margin-top:1px}'
+    + '.hdr-num{text-align:right}'
+    + '.doc-body{padding:10px 12px}'
+    + '.row{display:flex;justify-content:space-between;gap:10px;margin-bottom:8px}'
+    + '.field{flex:1}'
+    + '.field .label{font-size:6.5pt;color:#8FA0B8;text-transform:uppercase;letter-spacing:.05em}'
+    + '.field .val{font-size:9pt;font-weight:600}'
+    + '.bill{margin-top:8px;border:1px solid #CBD5E1;border-radius:6px;padding:8px 10px;background:#F0F9FF}'
+    + '.bill-row{display:flex;justify-content:space-between;font-size:8.5pt;padding:2px 0}'
+    + '.bill-row.total{font-weight:800;border-top:1px solid #CBD5E1;margin-top:4px;padding-top:5px}'
+    + '.due-pos{color:#FF4C6A}'
+    + '.due-zero{color:#00C896}'
+    + '.footer{padding:6px 12px;border-top:1px solid #E2E8F0;font-size:7pt;color:#8FA0B8;display:flex;justify-content:space-between}'
+    + '</style></head><body><div class="wrap">'
+
+    + '<div class="hdr">'
+    +   '<div><div class="hdr-lab">Al-Azizi Dental Lab</div><div class="hdr-sub">Damanhour, Egypt &middot; +20 120 360 5552</div></div>'
+    +   '<div class="hdr-num"><div class="hdr-lab">Order #'+o.orderNum+'</div><div class="hdr-sub">'+now+'</div></div>'
+    + '</div>'
+
+    + '<div class="doc-body">'
+    +   '<div class="row"><div class="field"><div class="label">Doctor</div><div class="val">Dr. '+o.doctor+'</div></div>'
+    +     '<div class="field"><div class="label">Patient</div><div class="val">'+(o.patient||'-')+'</div></div></div>'
+    +   '<div class="row"><div class="field"><div class="label">Service</div><div class="val">'+o.service+'</div></div>'
+    +     '<div class="field"><div class="label">Due Date</div><div class="val">'+(o.due||'-')+'</div></div></div>'
+    +   (o.shade || o.units ? ('<div class="row">'
+          + (o.shade ? '<div class="field"><div class="label">Shade</div><div class="val">'+o.shade+'</div></div>' : '<div class="field"></div>')
+          + (o.units ? '<div class="field"><div class="label">Units</div><div class="val">'+o.units+'</div></div>' : '<div class="field"></div>')
+        + '</div>') : '')
+    +   (o.notes ? ('<div class="row"><div class="field"><div class="label">Notes</div><div class="val">'+o.notes+'</div></div></div>') : '')
+
+    +   '<div class="bill">'
+    +     '<div class="bill-row"><span>Price</span><span>'+(o.isRemake?'FREE':fmt(o.price)+' EGP')+'</span></div>'
+    +     '<div class="bill-row"><span>Paid</span><span>'+fmt(o.paid||0)+' EGP</span></div>'
+    +     '<div class="bill-row total"><span>Due</span><span class="'+(due>0?'due-pos':'due-zero')+'">'+fmt(Math.max(0,due))+' EGP</span></div>'
+    +     '<div class="bill-row"><span>Status</span><span>'+(o.isRemake?'Remake (Free)':(o.payment||'Unpaid'))+'</span></div>'
+    +   '</div>'
+    + '</div>'
+
+    + '<div class="footer">'
+    +   '<span>Al-Azizi Lab System</span>'
+    +   '<span>Order #'+o.orderNum+'</span>'
+    + '</div>'
+
+    + '</div></body></html>';
+
+  var win = window.open('','_blank','width=560,height=760');
+  if(!win){ showToast('Please allow popups to open the receipt.','error'); if(callback) callback(false); return; }
+  win.document.open();
+  win.document.write(html_out);
+  win.document.close();
+  var done = false;
+  function doPrint(){ if(!done){ done=true; win.focus(); win.print(); } }
+  win.onload = function(){ setTimeout(doPrint, 400); };
+  setTimeout(doPrint, 1500);
+  if(callback) callback(true);
+}
 function sendWorkOrderWhatsApp(orderId){
   var o = state.orders.find(function(x){ return x.id===orderId; });
   if(!o){ alert('Order not found.'); return; }
   var d = state.doctors.find(function(x){ return x.name===o.doctor; }) || {};
   var phone = (d.whatsapp||d.phone||'').replace(/[^0-9]/g,'');
   if(!phone){ alert('No WhatsApp number for Dr. '+o.doctor); return; }
+  var due = Number(o.price||0)-Number(o.paid||0);
 
   var parts = [
     'Lab Work Order — Al-Azizi Dental Lab',
@@ -7371,11 +7519,18 @@ function sendWorkOrderWhatsApp(orderId){
     'Priority: '+(o.priority||'Normal'),
     (o.notes?'Notes: '+o.notes:''),
     '─────────────────',
+    'Bill:',
+    o.isRemake ? 'FREE (Remake)' : 'Price: '+fmt(o.price)+' EGP',
+    (!o.isRemake && Number(o.paid||0)>0) ? 'Paid: '+fmt(o.paid)+' EGP' : '',
+    (!o.isRemake) ? 'Status: '+(o.payment||'Unpaid')+(due>0?' | Due: '+fmt(due)+' EGP':'') : '',
     'Al-Azizi Dental Lab',
     'Damanhour · +20 120 360 5552'
   ].filter(Boolean);
 
-  window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(parts.join('\n')),'_blank');
+  generateOrderReceiptPDF(orderId, function(pdfGenerated){
+    window.open('https://wa.me/'+phone+'?text='+encodeURIComponent(parts.join('\n')),'_blank');
+    if(pdfGenerated){ showToast('Receipt opened - use Print, Save as PDF, then attach it in WhatsApp.','done'); }
+  });
 }
 
 </script>
