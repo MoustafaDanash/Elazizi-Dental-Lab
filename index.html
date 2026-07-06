@@ -3989,6 +3989,19 @@ function renderDoctors(){
     const overdue = isOverdue(d, orders.filter(o=>o.payment!=='Paid'));
     const creditPct = d.credit>0 ? Math.min(100,Math.round((due/d.credit)*100)) : 0;
     const creditColor = creditPct>90?'#FF4C6A':creditPct>60?'var(--gold)':'var(--green)';
+    const divDue = {Porcelain:0, Zirconia:0, General:0};
+    orders.forEach(o=>{
+      const dd = Number(o.price||0)-Number(o.paid||0);
+      if(!dd) return;
+      if(o.division==='Porcelain') divDue.Porcelain+=dd;
+      else if(o.division==='Zirconia') divDue.Zirconia+=dd;
+      else divDue.General+=dd;
+    });
+    const divParts=[];
+    if(divDue.Porcelain) divParts.push('<span style="color:var(--gold);font-weight:700">🦷 '+fmt(divDue.Porcelain)+'</span>');
+    if(divDue.Zirconia)  divParts.push('<span style="color:var(--cyan);font-weight:700">⬜ '+fmt(divDue.Zirconia)+'</span>');
+    if(divDue.General)   divParts.push('<span style="color:var(--gray)">◻ '+fmt(divDue.General)+'</span>');
+    const divBreakdown = (due!==0 && divParts.length) ? '<div style="font-size:.6rem;margin-top:3px;white-space:nowrap">'+divParts.join(' · ')+'</div>' : '';
     return `<tr>
       <td>
         <strong>${d.name}</strong>
@@ -3998,9 +4011,10 @@ function renderDoctors(){
       <td>${d.phone||'—'}</td>
       <td>${d.clinic||'—'}</td>
       <td>${ptBadge(d.term||'On Delivery')}</td>
-      <td>${d.credit>0?`<div style="font-size:.72rem">${fmt(due)} / ${fmt(d.credit)} EGP<div class="credit-bar"><div class="credit-fill" style="width:${creditPct}%;background:${creditColor}"></div></div></div>`:`<div style="font-size:.72rem">
+      <td>${d.credit>0?`<div style="font-size:.72rem">${fmt(due)} / ${fmt(d.credit)} EGP<div class="credit-bar"><div class="credit-fill" style="width:${creditPct}%;background:${creditColor}"></div></div>${divBreakdown}</div>`:`<div style="font-size:.72rem">
   <div style="font-weight:700;color:${due>0?'#FF4C6A':'var(--green)'}">${fmt(due)} EGP</div>
   ${invoiced>0?'<div style="font-size:.6rem;color:var(--gray)">'+fmt(paid)+' / '+fmt(invoiced)+' EGP</div>':''}
+  ${divBreakdown}
 </div>`}</td>
       <td>${orders.length}</td>
       <td>
@@ -4462,7 +4476,15 @@ function saveDoctor(){
   };
   if(editingDoctorId){
     const idx=state.doctors.findIndex(x=>x.id===editingDoctorId);
+    const oldName = idx>=0 ? state.doctors[idx].name : null;
     if(idx>=0) state.doctors[idx]=data; else state.doctors.push(data);
+    // Orders/payments/scans/expenses link to the doctor by name — cascade a rename or they orphan and drop off the balance
+    if(oldName && oldName!==data.name){
+      (state.orders||[]).forEach(function(o){ if(o.doctor===oldName) o.doctor=data.name; });
+      (state.payments||[]).forEach(function(p){ if(p.doctor===oldName) p.doctor=data.name; });
+      (state.scanSchedule||[]).forEach(function(s){ if(s.doctor===oldName) s.doctor=data.name; });
+      (state.expenses||[]).forEach(function(e){ if(e.incomeDoctor===oldName) e.incomeDoctor=data.name; });
+    }
     if(!state.orders) state.orders=[];
     const obIdx = state.orders.findIndex(o=>o.doctor===data.name && o.service==='Opening Balance');
     if(obIdx>=0){
@@ -4838,6 +4860,14 @@ function openBill(doctorName){
   const allInvoiced = allOrders.reduce((s,o)=>s+Number(o.price||0),0);
   const allPaid     = allOrders.reduce((s,o)=>s+Number(o.paid||0),0);
   const allDue      = allInvoiced - allPaid;
+  const billDivDue = {Porcelain:0, Zirconia:0, General:0};
+  allOrders.forEach(o=>{
+    const dd = Number(o.price||0)-Number(o.paid||0);
+    if(!dd) return;
+    if(o.division==='Porcelain') billDivDue.Porcelain+=dd;
+    else if(o.division==='Zirconia') billDivDue.Zirconia+=dd;
+    else billDivDue.General+=dd;
+  });
 
   // Populate header
   document.getElementById('bill-doctor-name').textContent = doctorName;
@@ -4863,7 +4893,13 @@ function openBill(doctorName){
           <div style="font-size:.6rem;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px">Outstanding Balance</div>
           <div style="font-size:.9rem;font-weight:800;color:${allDue>0?'#FF4C6A':'var(--green)'}">${fmt(allDue)} EGP</div>
         </div>
-      </div>`;
+      </div>
+      ${allDue!==0 && (billDivDue.Porcelain||billDivDue.Zirconia||billDivDue.General) ? `<div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin:-6px 0 14px 0;padding:8px 12px;background:rgba(0,0,0,.02);border-radius:8px;font-size:.68rem">
+        <span style="color:var(--gray);text-transform:uppercase;letter-spacing:.06em;font-size:.6rem;align-self:center">Due by division:</span>
+        ${billDivDue.Porcelain?'<span style="color:var(--gold);font-weight:700">🦷 Porcelain: '+fmt(billDivDue.Porcelain)+' EGP</span>':''}
+        ${billDivDue.Zirconia?'<span style="color:var(--cyan);font-weight:700">⬜ Zirconia: '+fmt(billDivDue.Zirconia)+' EGP</span>':''}
+        ${billDivDue.General?'<span style="color:var(--gray);font-weight:600">◻ General: '+fmt(billDivDue.General)+' EGP</span>':''}
+      </div>`:''}`;
   }
 
   // ── CURRENT OUTSTANDING ORDERS ──
