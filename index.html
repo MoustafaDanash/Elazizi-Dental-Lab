@@ -4681,11 +4681,12 @@ document.querySelectorAll('.modal-bg').forEach(m=>{
   m.addEventListener('click',e=>{ if(e.target===m) m.classList.remove('open'); });
 });
 
-// ── INIT ──────────────────────────────────────────────────────────────────
-// Step 1: load from localStorage immediately
-load();
+// ── INIT — CLOUD-FIRST ─────────────────────────────────────────────────────
+// The UI never renders from this device's local cache: boot blocks on the
+// login screen until Supabase data loads, and keeps retrying if the cloud is
+// unreachable instead of silently "working offline" with stale/empty lists.
+load(); // base structure only — nothing is shown until the cloud load succeeds
 
-// Step 2: ALWAYS ensure default admin exists synchronously
 (function ensureAdmin(){
   if(!state.users || !state.users.length){
     state.users = [{id:'owner-default',name:'Owner',username:'admin',password:'1234',role:'owner'}];
@@ -4693,40 +4694,11 @@ load();
   }
 })();
 
-// Step 3: Try Supabase in background (non-blocking)
-testSupabase().then(async function(){
-  if(SB_ONLINE){
-    var indicator = document.getElementById('login-error');
-    if(indicator) indicator.textContent = 'Connecting to cloud...';
-    try{
-      if(localStorage.getItem('alazizi_sync_pending')==='1'){
-        try{ await syncToSupabase(); } catch(e){}
-      }
-      var timeoutP = new Promise(function(_,rej){ setTimeout(function(){ rej(new Error('timeout')); }, 12000); });
-      var loaded = await Promise.race([loadFromSupabase(), timeoutP]);
-      if(loaded){
-        // ensure admin after cloud load
-        if(!state.users||!state.users.length){ state.users=[{id:'owner-default',name:'Owner',username:'admin',password:'1234',role:'owner'}]; save(); }
-        if(indicator) indicator.textContent = '';
-        showToast('Cloud data loaded','done');
-        // If already logged in, re-render whatever page is currently active
-        if(currentUser){
-          applyRoleRestrictions();
-          var activePage = document.querySelector('.page.active');
-          var pageId = activePage ? activePage.id.replace('page-','') : 'dashboard';
-          renderPage(pageId);
-        }
-      }
-    } catch(e){
-      console.log('Cloud load failed:', e.message);
-      if(indicator) indicator.textContent = e.message==='timeout' ? 'Cloud sync slow — working offline' : '';
-    }
-  }
-}).catch(function(){ /* silent fail - work offline */ });
+var CLOUD_READY = false;
 
-// ── SESSION RESTORE ──────────────────────────────────────────────────────
-// Restore session from localStorage if within 4-hour timeout
-(function(){
+// Restore session from localStorage if within 4-hour timeout — called only
+// AFTER cloud data is loaded, so a restored session never shows stale lists
+function restoreSession(){
   try{
     var saved = localStorage.getItem('alazizi_session');
     if(saved){
@@ -4739,6 +4711,7 @@ testSupabase().then(async function(){
         document.querySelector('.sidebar').style.visibility='visible';
         document.querySelector('.main').style.visibility='visible';
         resetSessionTimer();
+        updateTopbarUser();
         applyRoleRestrictions();
         renderDashboard();
         return;
@@ -4750,7 +4723,45 @@ testSupabase().then(async function(){
   document.getElementById('auth-screen').style.display='flex';
   document.querySelector('.sidebar').style.visibility='hidden';
   document.querySelector('.main').style.visibility='hidden';
-})();
+}
+
+var cloudBootBusy = false;
+var cloudBootTimer = null;
+async function cloudBoot(){
+  if(CLOUD_READY || cloudBootBusy) return;
+  cloudBootBusy = true;
+  if(cloudBootTimer){ clearTimeout(cloudBootTimer); cloudBootTimer = null; }
+  var indicator = document.getElementById('login-error');
+  if(indicator) indicator.textContent = '⏳ Loading cloud data...';
+  try{
+    await testSupabase();
+    if(!SB_ONLINE) throw new Error('cannot reach cloud server');
+    if(localStorage.getItem('alazizi_sync_pending')==='1'){
+      try{ await syncToSupabase(); } catch(e){}
+    }
+    var loaded = await loadFromSupabase();
+    if(!loaded) throw new Error('cloud data unavailable');
+    CLOUD_READY = true;
+    if(!state.users||!state.users.length){ state.users=[{id:'owner-default',name:'Owner',username:'admin',password:'1234',role:'owner'}]; save(); }
+    if(indicator) indicator.textContent = '';
+    showToast('Cloud data loaded','done');
+    restoreSession();
+  } catch(e){
+    console.error('Cloud boot failed:', e.message);
+    if(indicator) indicator.innerHTML = '⚠️ Cannot load cloud data — check your internet connection. Retrying...'
+      + '<br><button class="btn btn-primary" style="margin-top:8px" onclick="cloudBoot()">🔄 Retry Now</button>';
+    cloudBootTimer = setTimeout(cloudBoot, 15000);
+  } finally {
+    cloudBootBusy = false;
+  }
+}
+
+// Boot: show the login screen with loading status until cloud data arrives
+currentUser = null;
+document.getElementById('auth-screen').style.display='flex';
+document.querySelector('.sidebar').style.visibility='hidden';
+document.querySelector('.main').style.visibility='hidden';
+cloudBoot();
 
 // Lock screen when page becomes hidden (mobile background / tab switch)
 // ── SESSION TIMEOUT — lock after 8 hours of inactivity ─────────────────────
@@ -4800,6 +4811,7 @@ function doLogin(){
   const username=document.getElementById('login-username').value.trim();
   const password=document.getElementById('login-password').value;
   const err=document.getElementById('login-error');
+  if(!CLOUD_READY){err.textContent='⏳ Still loading cloud data — one moment...';cloudBoot();return;}
   if(!username||!password){err.textContent='Please enter username and password.';return;}
   const user=state.users.find(u=>u.username===username&&u.password===password);
   if(!user){err.textContent='Invalid username or password.';return;}
@@ -5604,7 +5616,7 @@ function printOrder(orderId){
   const docRec  = state.doctors.find(d => d.name === o.doctor);
   const rate    = plItem ? Number(docRec && docRec.customPricing && docRec.customPricing[plItem.id] !== undefined
                     ? docRec.customPricing[plItem.id] : plItem.price) : null;
-  const showRate   = plItem && plItem.unit === 'per unit' && rate > 0 && rate * units === Number(o.price||0);
+  const showRate   = rate > 0 && rate * units === Number(o.price||0);
   const orderLabel = `This Order (${units} unit${units>1?'s':''}${showRate ? ' × '+fmt(rate) : ''})`;
 
   const html = `
@@ -6231,6 +6243,25 @@ function setDoctorDivision(val){
 // ── SUPABASE SYNC ────────────────────────────────────────────────────────────
 async function syncToSupabase(){
   if(!SB_ONLINE) return;
+  // Guard: never overwrite the cloud with a drastically smaller dataset —
+  // protects against a device that booted empty/stale pushing over real data
+  try{
+    var chkRes = await fetch(SB_URL+'/rest/v1/app_state?select=data&id=eq.alazizi-main',{headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}});
+    if(chkRes.ok){
+      var chkRows = await chkRes.json();
+      if(chkRows.length && chkRows[0].data){
+        var cloudNow = JSON.parse(chkRows[0].data);
+        var co=(cloudNow.orders||[]).length, cd=(cloudNow.doctors||[]).length;
+        var lo=(state.orders||[]).length,  ld=(state.doctors||[]).length;
+        if(lo < co*0.5 || ld < cd*0.5){
+          console.error('SYNC BLOCKED — local orders '+lo+'/'+co+', doctors '+ld+'/'+cd);
+          try{ localStorage.removeItem('alazizi_sync_pending'); }catch(e2){}
+          if(typeof showToast==='function') showToast('⚠️ Sync blocked: this device has incomplete data. Refresh to reload from cloud.','error');
+          return;
+        }
+      }
+    }
+  } catch(e){ /* guard is best-effort — if the check itself fails, the upsert below fails too when offline */ }
   try{
     localStorage.setItem('alazizi_sync_pending','1');
     var blob = {
@@ -7406,7 +7437,7 @@ function recalcOrderPrice(){
   var priceEl = document.getElementById('o-price');
   var unitEl = document.getElementById('o-units');
   var units = Number(unitEl?.value||1);
-  if(item.unit==='per unit' && units>1) price = price * units;
+  if(units>1) price = price * units;
 
   if(doctor && doctor.caseBonus && Number(doctor.caseBonus.amount)>0){
     var hasModel = document.getElementById('o-has-model')?.checked;
@@ -7592,7 +7623,7 @@ function generateOrderReceiptPDF(orderId, callback){
   var rDoc  = state.doctors.find(function(x){ return x.name===o.doctor; });
   var rRate = rItem ? Number(rDoc && rDoc.customPricing && rDoc.customPricing[rItem.id]!==undefined
                 ? rDoc.customPricing[rItem.id] : rItem.price) : null;
-  var rShow = !o.isRemake && rItem && rItem.unit==='per unit' && rRate>0 && rRate*rUnits===Number(o.price||0);
+  var rShow = !o.isRemake && rRate>0 && rRate*rUnits===Number(o.price||0);
 
   var html_out = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
     + '<title>Receipt - Order #'+o.orderNum+'</title>'
