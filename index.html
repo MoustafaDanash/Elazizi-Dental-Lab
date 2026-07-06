@@ -1696,6 +1696,10 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
         <input id="o-shade" placeholder="e.g. A2, BL2..."/>
       </div>
       <div class="form-group">
+        <label>Tooth # (FDI) <span style="font-size:.65rem;color:var(--gray);font-weight:400">(for position-based pricing)</span></label>
+        <input id="o-tooth" placeholder="e.g. 14, 21..." oninput="recalcOrderPrice()"/>
+      </div>
+      <div class="form-group">
         <label>Units</label>
         <input id="o-units" type="number" min="1" value="1" oninput="recalcOrderPrice()"/>
       </div>
@@ -1784,6 +1788,12 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:0">
           <input type="checkbox" id="o-remake" onchange="onRemakeToggle()" style="width:16px;height:16px;accent-color:var(--purple)"/>
           <span>🔁 Remake — not billed to doctor (lab bears the cost)</span>
+        </label>
+      </div>
+      <div class="form-group form-full" style="background:rgba(0,180,216,.06);border:1px solid rgba(0,180,216,.2);border-radius:10px;padding:10px 12px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:0">
+          <input type="checkbox" id="o-has-model" onchange="recalcOrderPrice()" style="width:16px;height:16px;accent-color:var(--cyan)"/>
+          <span>🦷 Includes model/die <span style="font-size:.65rem;color:var(--gray);font-weight:400">(for doctors with model-based bonus pricing)</span></span>
         </label>
       </div>
       <div class="form-group form-full">
@@ -4169,6 +4179,8 @@ function openNewOrder(){
   setPriority('Normal');
   setOrderDivision('');
   document.getElementById('o-units').value=1;
+  document.getElementById('o-tooth').value='';
+  var hasModelElNew = document.getElementById('o-has-model'); if(hasModelElNew){ hasModelElNew.checked=false; }
   document.getElementById('o-price').value='';
   document.getElementById('o-paid').value=0;
   document.getElementById('o-status').value='Pending';
@@ -4193,6 +4205,8 @@ function editOrder(id){
   document.getElementById('o-service').value=o.service;
   document.getElementById('o-shade').value=o.shade||'';
   document.getElementById('o-units').value=o.units||1;
+  document.getElementById('o-tooth').value=o.tooth||'';
+  var hasModelElEdit = document.getElementById('o-has-model'); if(hasModelElEdit){ hasModelElEdit.checked = !!o.hasModel; }
   document.getElementById('o-price').value=o.price||0;
   document.getElementById('o-paid').value=o.paid||0;
   document.getElementById('o-status').value=o.status;
@@ -4220,6 +4234,8 @@ async function saveOrder(){
     doctor, patient:document.getElementById('o-patient').value,
     service, shade:document.getElementById('o-shade').value,
     units:document.getElementById('o-units').value,
+    tooth:document.getElementById('o-tooth')?.value||'',
+    hasModel:document.getElementById('o-has-model')?.checked||false,
     price:isRemake ? 0 : (document.getElementById('o-price').value||0),
     paid:isRemake ? 0 : (document.getElementById('o-paid').value||0),
     status:document.getElementById('o-status').value,
@@ -4332,7 +4348,10 @@ function toggleDoctorPricing(){
   el.style.display=open?'none':'';
   icon.textContent=open?'▼ Show':'▲ Hide';
 }
-function populateDoctorPricing(existing){
+function populateDoctorPricing(doctor){
+  doctor = doctor || {};
+  var existing = doctor.customPricing || {};
+  var positionExisting = doctor.positionPricing || {};
   var el=document.getElementById('d-pricing-table'); if(!el) return;
   var list=(state.pricelist||[]).filter(function(x){ return x.active!==false; });
   if(!list.length){
@@ -4341,17 +4360,33 @@ function populateDoctorPricing(existing){
   }
   var cats={};
   list.forEach(function(item){ if(!cats[item.category]) cats[item.category]=[]; cats[item.category].push(item); });
-  var icons={Zirconia:'⬜',Porcelain:'🦷',Veneers:'✨',Implant:'🔩',Removable:'🦷',Digital:'💻',Other:'📌'};
+  var icons={Zirconia:'⬜',Porcelain:'🦷',Veneers:'✨',Implant:'🔩',Removable:'🦷',Digital:'💻',PMMA:'🧪',Other:'📌'};
   var html='<table style="width:100%;border-collapse:collapse;font-size:.73rem">';
-  html+='<thead><tr style="background:var(--off)"><th style="padding:5px 8px;text-align:left;color:var(--gray);font-size:.6rem">Service</th><th style="padding:5px 8px;text-align:right;color:var(--gray);font-size:.6rem">Standard</th><th style="padding:5px 8px;text-align:right;color:var(--cyan);font-size:.6rem">Custom Price</th></tr></thead><tbody>';
+  html+='<thead><tr style="background:var(--off)"><th style="padding:5px 8px;text-align:left;color:var(--gray);font-size:.6rem">Service</th><th style="padding:5px 8px;text-align:right;color:var(--gray);font-size:.6rem">Standard</th><th style="padding:5px 8px;text-align:right;color:var(--cyan);font-size:.6rem">Custom Price</th><th style="padding:5px 8px;text-align:right;color:var(--navy);font-size:.6rem">Anterior<br/>(FDI 1-3)</th><th style="padding:5px 8px;text-align:right;color:var(--navy);font-size:.6rem">Posterior<br/>(FDI 4-8)</th></tr></thead><tbody>';
   Object.keys(cats).sort().forEach(function(cat){
-    html+='<tr><td colspan="3" style="padding:5px 8px;background:var(--off);font-size:.6rem;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em">'+(icons[cat]||'•')+' '+cat+'</td></tr>';
+    html+='<tr><td colspan="5" style="padding:5px 8px;background:var(--off);font-size:.6rem;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em">'+(icons[cat]||'•')+' '+cat+'</td></tr>';
     cats[cat].forEach(function(item){
       var ov=existing&&existing[item.id]!==undefined?existing[item.id]:'';
-      html+='<tr><td style="padding:5px 8px;border-bottom:1px solid var(--border)">'+ item.name +'</td>'+ '<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:right;color:var(--gray)">'+ fmt(item.price) +' EGP / '+item.unit+'</td>'+ '<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:right"><input type="number" min="0" step="10" data-item-id="'+item.id+'" style="width:90px;padding:4px 7px;border:1px solid var(--border);border-radius:6px;font-size:.73rem;text-align:right" placeholder="'+item.price+'" value="'+ ov +'"/></td></tr>';
+      var posOv = positionExisting&&positionExisting[item.id] ? positionExisting[item.id] : {};
+      var antOv = posOv.anterior!==undefined ? posOv.anterior : '';
+      var postOv = posOv.posterior!==undefined ? posOv.posterior : '';
+      html+='<tr>'
+        +'<td style="padding:5px 8px;border-bottom:1px solid var(--border)">'+ item.name +'</td>'
+        +'<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:right;color:var(--gray)">'+ fmt(item.price) +' EGP / '+item.unit+'</td>'
+        +'<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:right"><input type="number" min="0" step="10" data-item-id="'+item.id+'" style="width:80px;padding:4px 7px;border:1px solid var(--border);border-radius:6px;font-size:.73rem;text-align:right" placeholder="'+item.price+'" value="'+ ov +'"/></td>'
+        +'<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:right"><input type="number" min="0" step="10" data-pos-item-id="'+item.id+'" data-pos="anterior" style="width:70px;padding:4px 7px;border:1px solid var(--border);border-radius:6px;font-size:.73rem;text-align:right" placeholder="—" value="'+ antOv +'"/></td>'
+        +'<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:right"><input type="number" min="0" step="10" data-pos-item-id="'+item.id+'" data-pos="posterior" style="width:70px;padding:4px 7px;border:1px solid var(--border);border-radius:6px;font-size:.73rem;text-align:right" placeholder="—" value="'+ postOv +'"/></td>'
+        +'</tr>';
     });
   });
   html+='</tbody></table>';
+  var bonus = doctor.caseBonus || {};
+  html += '<div style="margin-top:12px;padding:10px 12px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2);border-radius:10px">'
+    + '<label style="font-weight:700;color:var(--navy);font-size:.78rem;display:block;margin-bottom:8px">💵 Per-Case Bonus <span style="font-size:.62rem;color:var(--gray);font-weight:400">— flat amount added on top of every order for this doctor</span></label>'
+    + '<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">'
+    + '<label style="font-size:.72rem;color:var(--gray);display:flex;align-items:center;gap:6px">Amount (EGP) <input id="d-bonus-amount" type="number" min="0" step="10" value="'+(bonus.amount!==undefined?bonus.amount:'')+'" style="width:90px;padding:4px 7px;border:1px solid var(--border);border-radius:6px;font-size:.73rem"/></label>'
+    + '<label style="font-size:.72rem;color:var(--gray);display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="d-bonus-requires-model" '+(bonus.requiresModel?'checked':'')+' style="width:14px;height:14px"/> Only when order includes a model/die</label>'
+    + '</div></div>';
   el.innerHTML=html;
 }
 function editDoctor(id){
@@ -4379,7 +4414,7 @@ function editDoctor(id){
   document.getElementById('doctor-modal-title').textContent = 'Edit Doctor';
   var tIcon=document.getElementById('d-pricing-toggle-icon'); if(tIcon) tIcon.textContent='▼ Show';
   var pTable=document.getElementById('d-pricing-table'); if(pTable) pTable.style.display='none';
-  populateDoctorPricing(d.customPricing||{});
+  populateDoctorPricing(d);
   openModal('doctor-modal');
 }
 function saveDoctor(){
@@ -4407,6 +4442,22 @@ function saveDoctor(){
         if(v!=='') cp[inp.dataset.itemId]=Number(v);
       });
       return cp;
+    })(),
+    positionPricing: (function(){
+      var pp={};
+      document.querySelectorAll('#d-pricing-table input[data-pos-item-id]').forEach(function(inp){
+        var v=inp.value.trim();
+        if(v==='') return;
+        var itemId=inp.dataset.posItemId, pos=inp.dataset.pos;
+        if(!pp[itemId]) pp[itemId]={};
+        pp[itemId][pos]=Number(v);
+      });
+      return pp;
+    })(),
+    caseBonus: (function(){
+      var amt=Number(document.getElementById('d-bonus-amount')?.value||0);
+      if(!amt) return null;
+      return { amount:amt, requiresModel: !!document.getElementById('d-bonus-requires-model')?.checked };
     })()
   };
   if(editingDoctorId){
@@ -7250,20 +7301,55 @@ function autoSetDurationFromService(){
   recalcOrderPrice();
 }
 
+function isAnteriorTooth(t){
+  var n = parseInt(String(t).trim(), 10);
+  if(!n || isNaN(n)) return null;
+  var pos = n % 10;
+  if(pos>=1 && pos<=3) return true;
+  if(pos>=4 && pos<=8) return false;
+  return null;
+}
+function classifyToothPosition(toothStr){
+  if(!toothStr) return null;
+  var teeth = String(toothStr).split(/[,\s]+/).filter(Boolean);
+  if(!teeth.length) return null;
+  var classes = teeth.map(isAnteriorTooth).filter(function(c){ return c!==null; });
+  if(!classes.length) return null;
+  var allAnterior  = classes.every(function(c){ return c===true; });
+  var allPosterior = classes.every(function(c){ return c===false; });
+  if(allAnterior)  return 'anterior';
+  if(allPosterior) return 'posterior';
+  return 'mixed';
+}
+// ── Doctor pricing exceptions: flat custom price → position-based (FDI anterior/posterior) → per-unit multiply → flat/conditional per-case bonus
 function recalcOrderPrice(){
   var svc = document.getElementById('o-service')?.value;
   if(!svc || !state.pricelist) return;
   var item = state.pricelist.find(function(p){ return p.name===svc; });
   if(!item) return;
-  // Auto-fill price from doctor custom pricing or standard price
   var doc = document.getElementById('o-doctor')?.value;
   var doctor = doc ? state.doctors.find(function(d){ return d.name===doc; }) : null;
+
   var customPrice = doctor&&doctor.customPricing&&doctor.customPricing[item.id]!==undefined ? doctor.customPricing[item.id] : null;
   var price = customPrice!==null ? customPrice : item.price;
+
+  var posRule = doctor&&doctor.positionPricing&&doctor.positionPricing[item.id];
+  if(posRule){
+    var posClass = classifyToothPosition(document.getElementById('o-tooth')?.value);
+    if(posClass==='anterior' && posRule.anterior!==undefined) price = posRule.anterior;
+    else if(posClass==='posterior' && posRule.posterior!==undefined) price = posRule.posterior;
+  }
+
   var priceEl = document.getElementById('o-price');
   var unitEl = document.getElementById('o-units');
   var units = Number(unitEl?.value||1);
   if(item.unit==='per unit' && units>1) price = price * units;
+
+  if(doctor && doctor.caseBonus && Number(doctor.caseBonus.amount)>0){
+    var hasModel = document.getElementById('o-has-model')?.checked;
+    if(!doctor.caseBonus.requiresModel || hasModel){ price += Number(doctor.caseBonus.amount); }
+  }
+
   if(priceEl && price) priceEl.value = price;
 }
 
