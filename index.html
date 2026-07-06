@@ -2953,6 +2953,7 @@ function renderSalaries(){
         +'<div>'
         +'<div class="salary-name">'+u.name+'</div>'
         +'<div class="salary-role">'+u.role
+          +(['employee','laboratory','delivery'].indexOf(u.role)>=0 ? (u.division==='Porcelain'?' · <span style="color:var(--gold);font-weight:700">🦷 Porcelain</span>':u.division==='Zirconia'?' · <span style="color:var(--cyan);font-weight:700">⬜ Zirconia</span>':' · <span style="color:var(--gray)">🔁 Both</span>') : '')
           +(isPaid?' · <span style="color:var(--green);font-weight:600">✅ Paid</span>':salary>0?' · <span style="color:#FF4C6A;font-weight:600">⚠ Pending</span>':'')
           +(totalAdvance>0?' · <span style="color:var(--gold);font-weight:600">💸 Advance: '+fmt(totalAdvance)+' EGP</span>':'')
         +'</div>'
@@ -5256,6 +5257,7 @@ function renderUsers(){
       + '<div class="user-username">@'+u.username+'</div>'
       + '</div>'
       + '<span class="auth-role role-'+u.role+'">'+u.role+'</span>'
+      + (['employee','laboratory','delivery'].indexOf(u.role)>=0 ? (u.division==='Porcelain'?'<span style="font-size:.6rem;padding:2px 8px;border-radius:20px;background:rgba(245,158,11,.12);color:var(--gold);font-weight:700">🦷 Porcelain</span>':u.division==='Zirconia'?'<span style="font-size:.6rem;padding:2px 8px;border-radius:20px;background:rgba(0,180,216,.12);color:var(--cyan);font-weight:700">⬜ Zirconia</span>':'<span style="font-size:.6rem;padding:2px 8px;border-radius:20px;background:var(--off);color:var(--gray);font-weight:600">🔁 Both</span>') : '')
       + '</div>'
       + '<div style="display:flex;gap:6px;align-items:center">'
       + actions
