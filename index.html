@@ -5596,8 +5596,16 @@ function printOrder(orderId){
   const prevBalance = state.orders
     .filter(x => x.doctor === o.doctor && x.id !== o.id)
     .reduce((s,x) => s + (Number(x.price||0) - Number(x.paid||0)), 0);
-  const units     = Number(o.units) || 1;
-  const unitPrice = Number(o.price||0) / units;
+  const units = Number(o.units) || 1;
+  // Show "× rate" only for genuinely per-unit services where the rate (custom or
+  // pricelist) actually accounts for the total — per-piece/per-arch prices are flat
+  // and dividing price by units would fabricate a rate that doesn't exist
+  const plItem  = (state.pricelist||[]).find(p => p.name === o.service);
+  const docRec  = state.doctors.find(d => d.name === o.doctor);
+  const rate    = plItem ? Number(docRec && docRec.customPricing && docRec.customPricing[plItem.id] !== undefined
+                    ? docRec.customPricing[plItem.id] : plItem.price) : null;
+  const showRate   = plItem && plItem.unit === 'per unit' && rate > 0 && rate * units === Number(o.price||0);
+  const orderLabel = `This Order (${units} unit${units>1?'s':''}${showRate ? ' × '+fmt(rate) : ''})`;
 
   const html = `
     ${printHeader('WORK ORDER', o.orderNum || o.id.slice(-6).toUpperCase(), date)}
@@ -5649,7 +5657,7 @@ function printOrder(orderId){
             <span>Previous Balance</span><span>${fmt(prevBalance)} EGP</span>
           </div>
           <div class="print-total-row">
-            <span>This Order (${units} unit${units>1?'s':''} × ${fmt(unitPrice)})</span>
+            <span>${orderLabel}</span>
             <span>${fmt(o.price)} EGP</span>
           </div>
           <div class="print-total-row">
@@ -7578,6 +7586,13 @@ function generateOrderReceiptPDF(orderId, callback){
     .filter(function(x){ return x.doctor===o.doctor && x.id!==o.id; })
     .reduce(function(s,x){ return s + (Number(x.price||0)-Number(x.paid||0)); }, 0);
   var rUnits = Number(o.units)||1;
+  // "× rate" only for per-unit services where the rate verifies against the total —
+  // per-piece/per-arch prices are flat, so no per-unit rate exists to show
+  var rItem = (state.pricelist||[]).find(function(p){ return p.name===o.service; });
+  var rDoc  = state.doctors.find(function(x){ return x.name===o.doctor; });
+  var rRate = rItem ? Number(rDoc && rDoc.customPricing && rDoc.customPricing[rItem.id]!==undefined
+                ? rDoc.customPricing[rItem.id] : rItem.price) : null;
+  var rShow = !o.isRemake && rItem && rItem.unit==='per unit' && rRate>0 && rRate*rUnits===Number(o.price||0);
 
   var html_out = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
     + '<title>Receipt - Order #'+o.orderNum+'</title>'
@@ -7620,7 +7635,7 @@ function generateOrderReceiptPDF(orderId, callback){
 
     +   '<div class="bill">'
     +     '<div class="bill-row"><span>Previous Balance</span><span>'+fmt(prevBal)+' EGP</span></div>'
-    +     '<div class="bill-row"><span>This Order ('+rUnits+' unit'+(rUnits>1?'s':'')+(o.isRemake?'':' × '+fmt(Number(o.price||0)/rUnits))+')</span><span>'+(o.isRemake?'FREE':fmt(o.price)+' EGP')+'</span></div>'
+    +     '<div class="bill-row"><span>This Order ('+rUnits+' unit'+(rUnits>1?'s':'')+(rShow?' × '+fmt(rRate):'')+')</span><span>'+(o.isRemake?'FREE':fmt(o.price)+' EGP')+'</span></div>'
     +     '<div class="bill-row"><span>Paid</span><span>'+fmt(o.paid||0)+' EGP</span></div>'
     +     '<div class="bill-row total"><span>Total Balance Due</span><span class="'+((prevBal+due)>0?'due-pos':'due-zero')+'">'+fmt(prevBal+due)+' EGP</span></div>'
     +     '<div class="bill-row"><span>Status</span><span>'+(o.isRemake?'Remake (Free)':(o.payment||'Unpaid'))+'</span></div>'
