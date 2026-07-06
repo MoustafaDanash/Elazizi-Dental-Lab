@@ -5592,6 +5592,13 @@ function printOrder(orderId){
   const statusColor = getStatusColor(o.status);
   const payColor    = getStatusColor(o.payment);
 
+  // Doctor's outstanding balance excluding this order (Opening Balance entries included)
+  const prevBalance = state.orders
+    .filter(x => x.doctor === o.doctor && x.id !== o.id)
+    .reduce((s,x) => s + (Number(x.price||0) - Number(x.paid||0)), 0);
+  const units     = Number(o.units) || 1;
+  const unitPrice = Number(o.price||0) / units;
+
   const html = `
     ${printHeader('WORK ORDER', o.orderNum || o.id.slice(-6).toUpperCase(), date)}
 
@@ -5639,15 +5646,19 @@ function printOrder(orderId){
       <div class="print-totals" style="margin-bottom:0">
         <div class="print-totals-box">
           <div class="print-total-row">
-            <span>Amount</span><span>${fmt(o.price)} EGP</span>
+            <span>Previous Balance</span><span>${fmt(prevBalance)} EGP</span>
+          </div>
+          <div class="print-total-row">
+            <span>This Order (${units} unit${units>1?'s':''} × ${fmt(unitPrice)})</span>
+            <span>${fmt(o.price)} EGP</span>
           </div>
           <div class="print-total-row">
             <span style="color:#00C896">Paid</span>
             <span style="color:#00C896">${fmt(o.paid || 0)} EGP</span>
           </div>
           <div class="print-total-row">
-            <span>Balance Due</span>
-            <span>${fmt(Number(o.price||0) - Number(o.paid||0))} EGP</span>
+            <span>Total Balance Due</span>
+            <span>${fmt(prevBalance + Number(o.price||0) - Number(o.paid||0))} EGP</span>
           </div>
         </div>
       </div>
@@ -7562,6 +7573,11 @@ function generateOrderReceiptPDF(orderId, callback){
   if(!o){ if(callback) callback(false); return; }
   var now = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
   var due = Number(o.price||0)-Number(o.paid||0);
+  // Doctor's outstanding balance excluding this order (remakes carry price 0)
+  var prevBal = state.orders
+    .filter(function(x){ return x.doctor===o.doctor && x.id!==o.id; })
+    .reduce(function(s,x){ return s + (Number(x.price||0)-Number(x.paid||0)); }, 0);
+  var rUnits = Number(o.units)||1;
 
   var html_out = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
     + '<title>Receipt - Order #'+o.orderNum+'</title>'
@@ -7603,9 +7619,10 @@ function generateOrderReceiptPDF(orderId, callback){
     +   (o.notes ? ('<div class="row"><div class="field"><div class="label">Notes</div><div class="val">'+o.notes+'</div></div></div>') : '')
 
     +   '<div class="bill">'
-    +     '<div class="bill-row"><span>Price</span><span>'+(o.isRemake?'FREE':fmt(o.price)+' EGP')+'</span></div>'
+    +     '<div class="bill-row"><span>Previous Balance</span><span>'+fmt(prevBal)+' EGP</span></div>'
+    +     '<div class="bill-row"><span>This Order ('+rUnits+' unit'+(rUnits>1?'s':'')+(o.isRemake?'':' × '+fmt(Number(o.price||0)/rUnits))+')</span><span>'+(o.isRemake?'FREE':fmt(o.price)+' EGP')+'</span></div>'
     +     '<div class="bill-row"><span>Paid</span><span>'+fmt(o.paid||0)+' EGP</span></div>'
-    +     '<div class="bill-row total"><span>Due</span><span class="'+(due>0?'due-pos':'due-zero')+'">'+fmt(Math.max(0,due))+' EGP</span></div>'
+    +     '<div class="bill-row total"><span>Total Balance Due</span><span class="'+((prevBal+due)>0?'due-pos':'due-zero')+'">'+fmt(prevBal+due)+' EGP</span></div>'
     +     '<div class="bill-row"><span>Status</span><span>'+(o.isRemake?'Remake (Free)':(o.payment||'Unpaid'))+'</span></div>'
     +   '</div>'
     + '</div>'
