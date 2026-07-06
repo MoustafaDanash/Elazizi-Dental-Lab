@@ -2992,6 +2992,8 @@ function renderSalaries(){
         +'</div>';
     }).join('');
   }
+
+  renderAdvancesList();
 }
 
 function openPaySalaryModal(userId){
@@ -3046,6 +3048,7 @@ function confirmPaySalary(){
   const history = loadSalaryHistory();
   history.push({ id:uid(), userId, month, amount, note, date:today() });
   saveSalaryHistory(history);
+  save();
 
   const emp = state.users.find(u=>u.id===userId);
   addNotif('paid', 'Salary Paid — '+(emp?emp.name:''), fmt(amount)+' EGP for '+month);
@@ -6318,18 +6321,19 @@ function updateAdvanceSalaryInfo(){
 }
 
 function saveAdvance(){
-  const uid    = document.getElementById('adv-employee').value;
+  const empId  = document.getElementById('adv-employee').value;
   const amount = Number(document.getElementById('adv-amount').value||0);
   const note   = document.getElementById('adv-note').value;
   const date   = document.getElementById('adv-date').value;
   const deduct = document.getElementById('adv-deduct-month').value;
-  if(!uid||!amount){ alert('Select employee and enter amount.'); return; }
-  const u = state.users.find(x=>x.id===uid);
+  if(!empId||!amount){ alert('Select employee and enter amount.'); return; }
+  const u = state.users.find(x=>x.id===empId);
   const list = loadAdvances();
   const deductLabel = deduct==='next'?'next salary':deduct==='split2'?'split over 2 months':'split over 3 months';
   const newId = uid()+Math.random().toString(36).slice(2,5);
-  list.push({id:newId,userId:uid,amount,note,date,deduct,deducted:false,createdAt:new Date().toISOString()});
+  list.push({id:newId,userId:empId,amount,note,date,deduct,deducted:false,createdAt:new Date().toISOString()});
   saveAdvancesStore(list);
+  save();
   // Notification for the team
   addNotif('info',
     '💸 Advance Given — '+(u?u.name:''),
@@ -6346,6 +6350,7 @@ function markAdvanceDeducted(advId){
   list[idx].deducted=true;
   list[idx].deductedDate=today();
   saveAdvancesStore(list);
+  save();
   const u = state.users.find(x=>x.id===list[idx].userId);
   addNotif('paid',
     '✅ Advance Deducted — '+(u?u.name:''),
@@ -6522,15 +6527,15 @@ function onDeductAdvanceSelect(){
 }
 
 function saveDeduction(){
-  const uid     = document.getElementById('ded-employee').value;
+  const empId   = document.getElementById('ded-employee').value;
   const amount  = Number(document.getElementById('ded-amount').value||0);
   const date    = document.getElementById('ded-date').value;
   const type    = document.getElementById('ded-reason-type').value;
   const advId   = document.getElementById('ded-advance-select').value;
   const note    = document.getElementById('ded-note').value || (type==='absence'?'Absence/Late':type==='penalty'?'Penalty':'Deduction');
-  if(!uid||!amount){ alert('Select employee and enter amount.'); return; }
+  if(!empId||!amount){ alert('Select employee and enter amount.'); return; }
 
-  const u = state.users.find(x=>x.id===uid);
+  const u = state.users.find(x=>x.id===empId);
 
   // If deducting from an advance, mark it as deducted
   if(type==='advance' && advId){
@@ -6545,8 +6550,9 @@ function saveDeduction(){
 
   // Record deduction
   const deds = loadDeductions();
-  deds.push({ id:uid()+Math.random().toString(36).slice(2,5), userId:uid, amount, date, type, note, advId:advId||'', createdAt:new Date().toISOString() });
+  deds.push({ id:uid()+Math.random().toString(36).slice(2,5), userId:empId, amount, date, type, note, advId:advId||'', createdAt:new Date().toISOString() });
   saveDeductionsStore(deds);
+  save();
 
   // Notify
   const reasonLabel = type==='advance'?'Advance deduction':type==='absence'?'Absence/Late':type==='penalty'?'Penalty':note;
