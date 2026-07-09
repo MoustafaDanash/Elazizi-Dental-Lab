@@ -1534,6 +1534,7 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
         </tr></thead>
         <tbody id="exp-tbody"></tbody>
       </table>
+    </div>
     </div><!-- SCANNING SCHEDULE -->
     <div class="page" id="page-scan">
       <div class="sec-hdr">
@@ -1592,9 +1593,6 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
         <div id="rep-breakdown"></div>
       </div>
     </div>
-
-  </div>
-
 
   <!-- DELIVERY VIEW -->
   <div class="page" id="page-delivery">
@@ -3085,7 +3083,15 @@ function renderExpenses(){
   const now        = new Date();
   const thisMonth  = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
 
-  const totalIncome   = entries.filter(e=>e.type==='income').reduce((s,e)=>s+Number(e.amount||0),0);
+  // Real collected money: order payments (incl. prepaid credit + legacy
+  // approved scan fees) + non-doctor income entries. Doctor-payment entries
+  // mirror order.paid, so they are excluded to avoid double counting —
+  // this way amounts paid directly on orders also reach income/profit.
+  const orderCollected = state.orders.reduce((s,o)=>s+Number(o.paid||0),0)
+    + totalPrepaid()
+    + (state.scanSchedule||[]).filter(sc=>sc.approved&&sc.fee>0&&!sc.billedOrderId).reduce((s,sc)=>s+Number(sc.fee||0),0);
+  const otherIncome   = entries.filter(e=>e.type==='income' && !(e.incomeSource||'').startsWith('Doctor Payment')).reduce((s,e)=>s+Number(e.amount||0),0);
+  const totalIncome   = orderCollected + otherIncome;
   const totalExpenses = entries.filter(e=>e.type==='expense').reduce((s,e)=>s+Number(e.amount||0),0);
   const netProfit     = totalIncome - totalExpenses;
   const thisMonthEntries = entries.filter(e=>(e.date||'').startsWith(thisMonth));
@@ -3226,7 +3232,7 @@ function updateFinanceExpenseSummary(income, expenses, profit){
   if(!el) return;
   el.innerHTML =
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:2px">'
-    +'<div style="text-align:center"><div style="font-size:.65rem;color:var(--gray);text-transform:uppercase;letter-spacing:.08em">Manual Income</div>'
+    +'<div style="text-align:center"><div style="font-size:.65rem;color:var(--gray);text-transform:uppercase;letter-spacing:.08em">Income (Collected)</div>'
     +'<div style="font-weight:800;font-size:.95rem;color:var(--green)">'+fmt(income)+' EGP</div></div>'
     +'<div style="text-align:center"><div style="font-size:.65rem;color:var(--gray);text-transform:uppercase;letter-spacing:.08em">Total Expenses</div>'
     +'<div style="font-weight:800;font-size:.95rem;color:#FF4C6A">'+fmt(expenses)+' EGP</div></div>'
@@ -3507,6 +3513,10 @@ function editExpense(id){
   const entries = loadExpenses();
   const e = entries.find(x=>x.id===id);
   if(!e) return;
+  if(e.incomeSource==='Doctor Payment'){
+    alert('This entry mirrors a payment recorded in Finance. To change it, delete it (the amount returns to the doctor\'s balance) and record a new payment.');
+    return;
+  }
   editingExpenseId = id;
   document.getElementById('exp-type').value     = e.type;
   document.getElementById('exp-date').value     = e.date;
@@ -4768,7 +4778,19 @@ function savePayment(){
     addDoctorPrepaid(name, credited);
     remaining = 0;
   }
-  state.payments.push({id:uid(),doctor:name,amount:amt,note,date,allocations,credited});
+  const pmtId = uid();
+  state.payments.push({id:pmtId,doctor:name,amount:amt,note,date,allocations,credited});
+  // Mirror into the Expenses & Income ledger so the payment shows in the
+  // income log; totals there derive from order collections, so no double count
+  try{
+    const ledger = loadExpenses();
+    ledger.unshift({ id:uid(), type:'income', date:date, amount:amt, notes:'',
+      category:'Doctor Payment', description:'Payment from '+name+(note?' — '+note:''),
+      incomeSource:'Doctor Payment', incomeOwner:'', incomeDoctor:name,
+      payCategory:'', payCategoryOwner:'', expenseDivision:'', expenseOwner:'',
+      paymentId:pmtId, createdAt:new Date().toISOString() });
+    saveExpenses(ledger);
+  }catch(e){}
   addNotif('paid','Payment — '+name,fmt(amt)+' EGP received'+(credited>0?' · '+fmt(credited)+' EGP kept as credit':'')+(note?' · '+note:''));
   save(); closeModal('payment-modal');
   renderFinance(); renderDashboard(); renderOrders();
