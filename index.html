@@ -390,34 +390,27 @@ tr:hover td{background:rgba(0,180,216,.03)}
 
 /* ── PRINT STYLES ── */
 @media print {
-  body * { visibility: hidden; }
-  #print-doc-content, #print-doc-content * { visibility: visible; }
+  /* Remove the app from layout entirely — hidden-but-laid-out content used to add blank sheets */
+  body > *:not(#print-modal) { display: none !important; }
+  #print-modal {
+    display: block !important;
+    position: static !important; inset: auto !important;
+    background: #fff !important; padding: 0 !important; z-index: auto !important;
+  }
+  #print-modal .modal {
+    max-width: none !important; width: 100% !important;
+    max-height: none !important; overflow: visible !important;
+    box-shadow: none !important; border-radius: 0 !important;
+    padding: 0 !important; background: #fff !important;
+  }
   #print-doc-content {
-    position: fixed; inset: 0;
-    background: #fff; padding: 24px;
+    max-height: none !important; overflow: visible !important;
+    padding: 0 !important; background: #fff;
     font-family: 'Outfit', sans-serif;
     font-weight: 600;
-    max-height: none !important;
-    overflow: visible !important;
   }
-  #bill-print-area, #bill-print-area * { visibility: visible; }
-  #bill-print-area {
-    position: fixed; inset: 0;
-    background: #fff;
-    padding: 0;
-    margin: 0;
-    font-family: 'Outfit', sans-serif;
-    font-size: 11pt;
-    color: #000;
-  }
-  .no-print { display: none !important; }
-  .modal-hdr, .form-actions, .sidebar, .topbar { display: none !important; }
-  .modal-bg:not(#print-modal) { display: none !important; }
-
-  /* A4 default */
+  .no-print, .modal-hdr, .form-actions { display: none !important; }
   @page { size: A4; margin: 15mm; }
-  /* Override via JS for A5 */
-  @page.a5-print { size: A5; margin: 10mm; }
 }
 
 /* ── PRINT MODAL ── */
@@ -1570,8 +1563,10 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
             <option value="month">Monthly</option>
             <option value="quarter">Quarterly</option>
             <option value="year">Yearly</option>
+            <option value="all">All Time</option>
           </select>
           <select id="rep-period-value" onchange="renderReports()" style="padding:7px 12px;border:1px solid var(--border);border-radius:9px;font-size:.78rem;outline:none;background:var(--off);min-width:160px"></select>
+          <button class="btn btn-primary" onclick="printReportPDF()" style="font-size:.78rem">📄 Export PDF</button>
         </div>
       </div>
 
@@ -2201,6 +2196,29 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
           <td style="padding:8px 10px;text-align:right;font-size:.72rem" id="bill-subtotal">0 EGP</td>
           <td style="padding:8px 10px;text-align:right;font-size:.72rem;color:var(--green)" id="bill-totalpaid">0 EGP</td>
           <td style="padding:8px 10px;text-align:right;font-size:.75rem;color:#FF4C6A" id="bill-totaldue">0 EGP</td>
+        </tr>
+        <tr id="bill-credit-row" style="display:none;background:var(--off)">
+          <td colspan="6" style="padding:6px 10px;font-size:.7rem;font-weight:700;color:var(--green);text-align:right">Prepaid Credit</td>
+          <td style="padding:6px 10px;text-align:right;font-size:.72rem;font-weight:700;color:var(--green)" id="bill-credit">0 EGP</td>
+        </tr>
+        <tr id="bill-netdue-row" style="display:none;background:var(--off);font-weight:800">
+          <td colspan="6" style="padding:8px 10px;font-size:.72rem;text-align:right">Net Outstanding (after credit)</td>
+          <td style="padding:8px 10px;text-align:right;font-size:.78rem;color:#FF4C6A" id="bill-netdue">0 EGP</td>
+        </tr></tfoot>
+      </table>
+    </div>
+    <div id="bill-payments" style="display:none;margin-bottom:10px">
+      <div style="font-size:.65rem;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Payments Received</div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="background:var(--off)">
+          <th style="padding:5px 10px;text-align:left;font-size:.62rem;color:var(--gray)">Date</th>
+          <th style="padding:5px 10px;text-align:left;font-size:.62rem;color:var(--gray)">Division</th>
+          <th style="padding:5px 10px;text-align:right;font-size:.62rem;color:var(--green)">Amount</th>
+        </tr></thead>
+        <tbody id="bill-payments-rows"></tbody>
+        <tfoot><tr style="background:var(--off);font-weight:700">
+          <td colspan="2" style="padding:6px 10px;font-size:.68rem">Total Payments</td>
+          <td style="padding:6px 10px;text-align:right;font-size:.68rem;color:var(--green)" id="bill-payments-total">0 EGP</td>
         </tr></tfoot>
       </table>
     </div>
@@ -3513,7 +3531,7 @@ function editExpense(id){
   const entries = loadExpenses();
   const e = entries.find(x=>x.id===id);
   if(!e) return;
-  if(e.incomeSource==='Doctor Payment'){
+  if((e.incomeSource||'').startsWith('Doctor Payment')){
     alert('This entry mirrors a payment recorded in Finance. To change it, delete it (the amount returns to the doctor\'s balance) and record a new payment.');
     return;
   }
@@ -3555,6 +3573,10 @@ function saveExpense(){
     : payCategory==='Porcelain'?'Haitham'
     : payCategory==='Zirconia'?'Mostafa':'';
   const expenseDivision = document.getElementById('exp-division')?.value || '';
+  if(type==='income' && incomeSource.startsWith('Doctor Payment') && !incomeDoctor){
+    alert('Select the doctor for this payment — without it the amount will not reach the doctor\'s balance.');
+    return;
+  }
   const ownerMap = {'Porcelain':'Haitham — Porcelain Division','Zirconia':'Mostafa — Zirconia Division'};
   const entry = {
     id:       editingExpenseId||uid(),
@@ -3673,6 +3695,7 @@ function deleteExpense(id){
 let currentReportDivision = 'Overall';
 
 function dateInPeriod(dateStr, type, value){
+  if(type==='all') return true;
   if(!dateStr || !value) return false;
   if(type==='month') return dateStr.slice(0,7)===value;
   if(type==='year')  return dateStr.slice(0,4)===value;
@@ -3716,6 +3739,8 @@ function populateReportPeriods(){
     });
     opts = Object.keys(set).sort().reverse();
     sel.innerHTML = opts.map(function(q){ return '<option value="'+q+'">'+q.replace('-Q',' — Q')+'</option>'; }).join('');
+  } else if(type==='all'){
+    sel.innerHTML = '<option value="all">All Time — Whole History</option>';
   } else {
     const set = {};
     dates.forEach(function(d){ set[d.slice(0,4)]=true; });
@@ -3826,6 +3851,243 @@ function renderReportBreakdown(type, value){
     +'<div style="font-size:.65rem;color:var(--gray);margin-top:8px">Shared employees, shared expenses and Other Income (no division set) count fully toward Overall and split 50/50 between Porcelain and Zirconia. Net = Collected + Other Income − Expenses.</div>';
 }
 
+// ── PDF FINANCIAL REPORT ────────────────────────────────────────────────────
+function reportPeriodLabel(type, value){
+  if(type==='all') return 'All Time — Whole History';
+  if(type==='month') return new Date(value+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+  if(type==='quarter') return value.replace('-Q',' — Q');
+  return value;
+}
+
+function printReportPDF(){
+  var type  = document.getElementById('rep-period-type')?.value || 'month';
+  var value = document.getElementById('rep-period-value')?.value;
+  if(!value){ alert('Select a period first.'); return; }
+
+  var div     = currentReportDivision || 'Overall';
+  var isDiv   = div!=='Overall';
+  var label   = reportPeriodLabel(type, value);
+  var overall = computeReportNumbers(type, value, 'Overall');
+  var porc    = computeReportNumbers(type, value, 'Porcelain');
+  var zirc    = computeReportNumbers(type, value, 'Zirconia');
+  var rep     = isDiv ? (div==='Porcelain'?porc:zirc) : overall;
+  var divName = div==='Porcelain' ? '🦷 Porcelain Division — Haitham' : div==='Zirconia' ? '⬜ Zirconia Division — Mostafa' : '';
+  var genAt   = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
+
+  // Orders in period (Opening Balance rows are pre-system debt, not period revenue)
+  var pOrders = state.orders.filter(function(o){
+    return o.service!=='Opening Balance' && dateInPeriod((o.createdAt||'').slice(0,10), type, value)
+      && (!isDiv || o.division===div);
+  });
+  var stDone = 0, stPending = 0, stCancelled = 0;
+  pOrders.forEach(function(o){
+    if(o.status==='Done') stDone++;
+    else if(o.status==='Cancelled') stCancelled++;
+    else stPending++;
+  });
+
+  // Top doctors by invoiced
+  var docMap = {};
+  pOrders.forEach(function(o){
+    if(!docMap[o.doctor]) docMap[o.doctor]={cases:0,invoiced:0,collected:0};
+    docMap[o.doctor].cases++;
+    docMap[o.doctor].invoiced  += Number(o.price||0);
+    docMap[o.doctor].collected += Number(o.paid||0);
+  });
+  var topDocs = Object.keys(docMap).map(function(n){ return Object.assign({name:n},docMap[n]); })
+    .sort(function(a,b){ return b.invoiced-a.invoiced; }).slice(0,10);
+
+  // Service mix
+  var svcMap = {};
+  pOrders.forEach(function(o){
+    if(!svcMap[o.service]) svcMap[o.service]={count:0,revenue:0};
+    svcMap[o.service].count++;
+    svcMap[o.service].revenue += Number(o.price||0);
+  });
+  var svcRows = Object.keys(svcMap).map(function(s){ return Object.assign({service:s},svcMap[s]); })
+    .sort(function(a,b){ return b.revenue-a.revenue; });
+
+  // Expense categories (division view: own expenses in full, shared ones at 50% — same rule as computeReportNumbers)
+  var expMap = {};
+  loadExpenses().forEach(function(e){
+    if(e.type!=='expense' || !dateInPeriod(e.date, type, value)) return;
+    var amt = Number(e.amount||0);
+    if(isDiv){
+      if(e.expenseDivision===div){ /* full */ }
+      else if(!e.expenseDivision){ amt = amt*0.5; }
+      else return;
+    }
+    var c = e.category||'Other';
+    expMap[c] = (expMap[c]||0) + amt;
+  });
+  var expRows = Object.keys(expMap).map(function(c){ return {cat:c, amt:expMap[c]}; })
+    .sort(function(a,b){ return b.amt-a.amt; });
+
+  // Payments received in period
+  var pPays = (state.payments||[]).filter(function(p){
+    return dateInPeriod(p.date, type, value) && (!isDiv || paymentDivision(p)===div);
+  });
+  var payTotal = pPays.reduce(function(s,p){ return s+Number(p.amount||0); },0);
+  var payDiv = {Porcelain:0, Zirconia:0, Other:0};
+  pPays.forEach(function(p){
+    var dv = paymentDivision(p);
+    if(dv==='Porcelain') payDiv.Porcelain += Number(p.amount||0);
+    else if(dv==='Zirconia') payDiv.Zirconia += Number(p.amount||0);
+    else payDiv.Other += Number(p.amount||0);
+  });
+
+  // As-of-today snapshot (independent of period)
+  var snapOutstanding = 0, snapPrepaid = 0, snapDebtors = 0;
+  (state.doctors||[]).forEach(function(d){
+    var f = doctorFin(d.name);
+    if(f.due>0){ snapOutstanding += f.due; snapDebtors++; }
+    snapPrepaid += Number(d.prepaid||0);
+  });
+
+  var collectRate = rep.invoiced>0 ? Math.round(rep.paid/rep.invoiced*100) : 0;
+  var margin      = (rep.paid+rep.otherIncome)>0 ? Math.round(rep.netProfit/(rep.paid+rep.otherIncome)*100) : 0;
+  var netColor    = rep.netProfit>=0 ? '#00C896' : '#FF4C6A';
+
+  function trow(cells, opts){
+    opts = opts||{};
+    return '<tr style="'+(opts.bg?'background:'+opts.bg+';':'')+(opts.bold?'font-weight:800;':'')+'">'
+      + cells.map(function(c,i){
+          return '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;'+(i>0?'text-align:right;':'font-weight:600;')+(c.color?'color:'+c.color+';':'')+(c.bold?'font-weight:800;':'')+'">'+(c.v!==undefined?c.v:c)+'</td>';
+        }).join('')
+      + '</tr>';
+  }
+  function section(title, inner){
+    return '<div style="margin-top:16px;page-break-inside:avoid">'
+      + '<div style="font-size:.78em;color:#0F172A;text-transform:uppercase;letter-spacing:.08em;font-weight:800;border-bottom:2px solid #0F172A;padding-bottom:3px;margin-bottom:6px">'+title+'</div>'
+      + inner + '</div>';
+  }
+  function thead(cols){
+    return '<thead><tr>'+cols.map(function(c,i){ return '<th style="'+(i>0?'text-align:right':'text-align:left')+'">'+c+'</th>'; }).join('')+'</tr></thead>';
+  }
+
+  var docRowsHTML = topDocs.map(function(dd,i){
+    var share = rep.invoiced>0 ? Math.round(dd.invoiced/rep.invoiced*100) : 0;
+    return trow([dd.name, dd.cases, fmt(dd.invoiced)+' EGP', {v:fmt(dd.collected)+' EGP',color:'#00C896'}, share+'%'], {bg:i%2?'#F8FAFC':'#fff'});
+  }).join('');
+
+  var svcRowsHTML = svcRows.map(function(sv,i){
+    var share = rep.invoiced>0 ? Math.round(sv.revenue/rep.invoiced*100) : 0;
+    return trow([sv.service, sv.count, fmt(sv.revenue)+' EGP', share+'%'], {bg:i%2?'#F8FAFC':'#fff'});
+  }).join('');
+
+  var expRowsHTML = expRows.map(function(ex,i){
+    return trow([ex.cat, {v:fmt(ex.amt)+' EGP',color:'#FF4C6A'}], {bg:i%2?'#F8FAFC':'#fff'});
+  }).join('');
+  if(rep.salaryExpenses>0){
+    expRowsHTML += trow(['Salaries', {v:fmt(rep.salaryExpenses)+' EGP',color:'#FF4C6A'}], {bg:'#F8FAFC'});
+  }
+
+  function scard(lbl, val, color, sub){
+    return '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:8px 10px;text-align:center">'
+      + '<div style="font-size:.62em;color:#64748B;text-transform:uppercase;letter-spacing:.06em">'+lbl+'</div>'
+      + '<div style="font-size:1.15em;font-weight:800;margin-top:2px;'+(color?'color:'+color:'')+'">'+val+'</div>'
+      + (sub?'<div style="font-size:.6em;color:#94A3B8;margin-top:1px">'+sub+'</div>':'')
+      + '</div>';
+  }
+
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+    + '<title>Financial Report — '+(isDiv?div+' — ':'')+label+'</title>'
+    + '<style>'
+    + '@page{size:A4;margin:12mm}'
+    + 'body{font-family:Arial,sans-serif;font-size:10.5pt;margin:0;color:#0F172A}'
+    + 'table{width:100%;border-collapse:collapse;font-size:.85em}'
+    + 'th{background:#0F172A;color:#fff;padding:5px 8px;font-size:.8em;font-weight:700}'
+    + 'td{font-weight:600}'
+    + '</style></head><body>'
+
+    // Header
+    + '<div style="display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:10px;border-bottom:3px solid #0F172A">'
+    +   '<div><div style="font-size:1.4em;font-weight:800">Al-Azizi Dental Lab</div>'
+    +   '<div style="color:#64748B;font-size:.8em">Damanhour, Egypt &nbsp;|&nbsp; +20 120 360 5552</div></div>'
+    +   '<div style="text-align:right"><div style="font-size:1.4em;font-weight:800;color:#00B4D8">FINANCIAL REPORT</div>'
+    +   '<div style="font-weight:800">'+label+'</div>'
+    +   (isDiv?'<div style="font-weight:800;color:'+(div==='Porcelain'?'#D4A017':'#00B4D8')+'">'+divName+'</div>':'')
+    +   '<div style="color:#64748B;font-size:.75em">Generated '+genAt+'</div></div>'
+    + '</div>'
+
+    // Executive summary
+    + '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:14px">'
+    +   scard('Invoiced', fmt(rep.invoiced)+' EGP')
+    +   scard('Collected', fmt(rep.paid)+' EGP', '#00C896', collectRate+'% of invoiced')
+    +   scard('Other Income', fmt(rep.otherIncome)+' EGP', '#00C896')
+    +   scard('Expenses', fmt(rep.totalExpenses)+' EGP', '#FF4C6A', fmt(rep.opExpenses)+' op + '+fmt(rep.salaryExpenses)+' sal')
+    +   scard('Net Profit', fmt(rep.netProfit)+' EGP', netColor, margin+'% margin')
+    + '</div>'
+
+    // Division performance (division report: that division vs the whole lab)
+    + section(isDiv ? 'Division vs Overall' : 'Division Performance',
+      '<table>'+thead(['Division','Invoiced','Collected','Other Income','Expenses','Net Profit'])+'<tbody>'
+      + ((!isDiv||div==='Porcelain') ? trow(['🦷 Porcelain — Haitham', fmt(porc.invoiced)+' EGP', fmt(porc.paid)+' EGP', fmt(porc.otherIncome)+' EGP', {v:fmt(porc.totalExpenses)+' EGP',color:'#FF4C6A'}, {v:fmt(porc.netProfit)+' EGP',color:porc.netProfit>=0?'#00C896':'#FF4C6A',bold:true}]) : '')
+      + ((!isDiv||div==='Zirconia') ? trow(['⬜ Zirconia — Mostafa', fmt(zirc.invoiced)+' EGP', fmt(zirc.paid)+' EGP', fmt(zirc.otherIncome)+' EGP', {v:fmt(zirc.totalExpenses)+' EGP',color:'#FF4C6A'}, {v:fmt(zirc.netProfit)+' EGP',color:zirc.netProfit>=0?'#00C896':'#FF4C6A',bold:true}], {bg:'#F8FAFC'}) : '')
+      + trow(['Overall', fmt(overall.invoiced)+' EGP', fmt(overall.paid)+' EGP', fmt(overall.otherIncome)+' EGP', {v:fmt(overall.totalExpenses)+' EGP',color:'#FF4C6A'}, {v:fmt(overall.netProfit)+' EGP',color:overall.netProfit>=0?'#00C896':'#FF4C6A',bold:true}], {bg:'#F0F9FF',bold:true})
+      + '</tbody></table>'
+      + '<div style="font-size:.65em;color:#94A3B8;margin-top:4px">Shared expenses, shared salaries and Other Income split 50/50 between divisions. Net = Collected + Other Income − Expenses.</div>')
+
+    // Orders overview
+    + section('Orders Overview ('+pOrders.length+' orders)',
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'
+      + scard('Total Orders', pOrders.length)
+      + scard('Done', stDone, '#00C896')
+      + scard('Pending', stPending, '#D4A017')
+      + scard('Cancelled', stCancelled, '#FF4C6A')
+      + '</div>')
+
+    // Top doctors
+    + (topDocs.length ? section('Top Doctors by Revenue',
+      '<table>'+thead(['Doctor','Cases','Invoiced','Collected','Share'])+'<tbody>'+docRowsHTML+'</tbody></table>') : '')
+
+    // Service mix
+    + (svcRows.length ? section('Service Mix',
+      '<table>'+thead(['Service','Orders','Revenue','Share'])+'<tbody>'+svcRowsHTML+'</tbody></table>') : '')
+
+    // Payments
+    + (pPays.length ? section('Payments Received ('+pPays.length+' payments)',
+      isDiv
+        ? '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">'
+          + scard('Total Collected by '+div, fmt(payTotal)+' EGP', '#00C896')
+          + scard('Payments Count', pPays.length)
+          + '</div>'
+        : '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">'
+          + scard('Total Collected', fmt(payTotal)+' EGP', '#00C896')
+          + scard('🦷 Porcelain', fmt(payDiv.Porcelain)+' EGP', '#D4A017')
+          + scard('⬜ Zirconia', fmt(payDiv.Zirconia)+' EGP', '#00B4D8')
+          + scard('Other / Untagged', fmt(payDiv.Other)+' EGP')
+          + '</div>') : '')
+
+    // Expenses breakdown
+    + (expRows.length || rep.salaryExpenses>0 ? section('Expenses by Category'+(isDiv?' — '+div+' share':''),
+      '<table>'+thead(['Category','Amount'])+'<tbody>'+expRowsHTML
+      + trow(['Total', {v:fmt(rep.totalExpenses)+' EGP',color:'#FF4C6A',bold:true}], {bg:'#F0F9FF',bold:true})
+      + '</tbody></table>') : '')
+
+    // As-of-today snapshot
+    + section('Account Snapshot — as of '+genAt,
+      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">'
+      + scard('Outstanding Balances', fmt(snapOutstanding)+' EGP', '#FF4C6A', snapDebtors+' doctors owe')
+      + scard('Prepaid Credit Held', fmt(snapPrepaid)+' EGP', '#00C896')
+      + scard('Net Receivable', fmt(snapOutstanding-snapPrepaid)+' EGP')
+      + '</div>'
+      + '<div style="font-size:.65em;color:#94A3B8;margin-top:4px">Snapshot reflects lab-wide balances today, including opening balances — not limited to the report period'+(isDiv?' or division':'')+'.</div>')
+
+    + '<div style="margin-top:18px;padding-top:8px;border-top:1px solid #E2E8F0;text-align:center;font-size:.7em;color:#94A3B8">Al-Azizi Dental Lab — Confidential Financial Report &nbsp;|&nbsp; '+(isDiv?div+' &nbsp;|&nbsp; ':'')+label+' &nbsp;|&nbsp; Generated '+genAt+'</div>'
+    + '</body></html>';
+
+  var win = window.open('','_blank','width=850,height=1100');
+  if(!win){ alert('Please allow popups for this site to print.'); return; }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  var done=false;
+  function doPrint(){ if(!done){ done=true; win.focus(); win.print(); } }
+  win.onload = function(){ setTimeout(doPrint,400); };
+  setTimeout(doPrint,1500);
+}
+
 
 
 // ── GLOBAL SESSION ──
@@ -3934,6 +4196,20 @@ function doctorFin(name){
 }
 function totalPrepaid(){
   return (state.doctors||[]).reduce(function(s,d){ return s+Number(d.prepaid||0); },0);
+}
+// Division that collected a payment: from its linked income entry, else from the note text
+function paymentDivision(p){
+  try{
+    var e=(loadExpenses()||[]).find(function(x){ return x.paymentId===p.id; });
+    if(e){
+      if((e.incomeSource||'').indexOf('Porcelain')>=0) return 'Porcelain';
+      if((e.incomeSource||'').indexOf('Zirconia')>=0) return 'Zirconia';
+    }
+  }catch(err){}
+  var n=p.note||'';
+  if(n.indexOf('Porcelain')>=0) return 'Porcelain';
+  if(n.indexOf('Zirconia')>=0) return 'Zirconia';
+  return '';
 }
 // Undo a payment record: un-apply its recorded order allocations, then take
 // back any prepaid credit, then (legacy records without allocations) un-pay
@@ -5074,6 +5350,7 @@ function openBill(doctorName){
         ${billDivDue.Porcelain?'<span style="color:var(--gold);font-weight:700">🦷 Porcelain: '+fmt(billDivDue.Porcelain)+' EGP</span>':''}
         ${billDivDue.Zirconia?'<span style="color:var(--cyan);font-weight:700">⬜ Zirconia: '+fmt(billDivDue.Zirconia)+' EGP</span>':''}
         ${billDivDue.General?'<span style="color:var(--gray);font-weight:600">◻ General: '+fmt(billDivDue.General)+' EGP</span>':''}
+        ${binFin.prepaid>0?'<span style="color:var(--green);font-weight:700">💳 Credit: −'+fmt(binFin.prepaid)+' EGP</span>':''}
       </div>`:''}`;
   }
 
@@ -5105,6 +5382,44 @@ function openBill(doctorName){
   document.getElementById('bill-subtotal').textContent  = fmt(subtotal)+' EGP';
   document.getElementById('bill-totalpaid').textContent = fmt(totalPaid)+' EGP';
   document.getElementById('bill-totaldue').textContent  = fmt(totalDue)+' EGP';
+
+  // Prepaid credit reduces what the doctor actually owes on these items
+  const billCredit = Number(binFin.prepaid||0);
+  const creditRow  = document.getElementById('bill-credit-row');
+  const netRow     = document.getElementById('bill-netdue-row');
+  if(creditRow && netRow){
+    if(billCredit>0){
+      const net = totalDue - billCredit;
+      creditRow.style.display=''; netRow.style.display='';
+      document.getElementById('bill-credit').textContent = '−'+fmt(billCredit)+' EGP';
+      document.getElementById('bill-netdue').textContent = fmt(Math.max(0,net))+' EGP'+(net<0?' ('+fmt(-net)+' EGP credit remains)':'');
+    } else {
+      creditRow.style.display='none'; netRow.style.display='none';
+    }
+  }
+
+  // ── PAYMENTS RECEIVED SECTION ──
+  const docPayments = (state.payments||[]).filter(p=>p.doctor===doctorName)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const paySec = document.getElementById('bill-payments');
+  if(paySec){
+    if(!docPayments.length){
+      paySec.style.display='none';
+    } else {
+      paySec.style.display='';
+      document.getElementById('bill-payments-rows').innerHTML = docPayments.map((p,i)=>{
+        const div  = paymentDivision(p);
+        const dstr = p.date ? new Date(p.date+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+        const bg   = i%2===0?'':'background:rgba(0,0,0,.02)';
+        return `<tr style="${bg}">
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:.7rem">${dstr}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:.7rem">${div==='Porcelain'?'<span style="color:var(--gold);font-weight:700">🦷 Porcelain</span>':div==='Zirconia'?'<span style="color:var(--cyan);font-weight:700">⬜ Zirconia</span>':'—'}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.7rem;font-weight:700;color:var(--green)">${fmt(p.amount)} EGP</td>
+        </tr>`;
+      }).join('');
+      document.getElementById('bill-payments-total').textContent = fmt(docPayments.reduce((s,p)=>s+Number(p.amount||0),0))+' EGP';
+    }
+  }
 
   // ── PREVIOUS MONTH ORDERS SECTION ──
   const prevEl = document.getElementById('bill-prev-month');
@@ -5149,9 +5464,11 @@ function buildBillText(){
   const orders      = allOrders.filter(o=>o.payment!=='Paid');
   const prevOrders  = allOrders.filter(o=>(o.due||o.createdAt||'').slice(0,7)===prevMonth);
 
-  const allInvoiced = allOrders.reduce((s,o)=>s+Number(o.price||0),0);
-  const allPaid     = allOrders.reduce((s,o)=>s+Number(o.paid||0),0);
-  const allDue      = allInvoiced - allPaid;
+  const txtFin      = doctorFin(d.name);
+  const allInvoiced = txtFin.invoiced;
+  const allPaid     = txtFin.paid;
+  const allDue      = txtFin.due;
+  const txtCredit   = Number(txtFin.prepaid||0);
 
   const subtotal  = orders.reduce((s,o)=>s+Number(o.price||0),0);
   const totalPaid = orders.reduce((s,o)=>s+Number(o.paid||0),0);
@@ -5198,6 +5515,26 @@ function buildBillText(){
     text += `
 *Total Due: ${fmt(totalDue)} EGP*
 `;
+    if(txtCredit>0){
+      text += `Prepaid Credit: −${fmt(txtCredit)} EGP
+*Net Due: ${fmt(Math.max(0,totalDue-txtCredit))} EGP*
+`;
+    }
+  }
+
+  // Payments received
+  const txtPayments = (state.payments||[]).filter(p=>p.doctor===d.name)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  if(txtPayments.length){
+    text += `
+💳 *Payments Received*
+`;
+    txtPayments.forEach((p,i)=>{
+      const div  = paymentDivision(p);
+      const dstr = p.date ? new Date(p.date+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '';
+      text += `${i+1}. ${dstr} — ${fmt(p.amount)} EGP${div?' ('+div+')':''}
+`;
+    });
   }
 
   // Previous month orders
@@ -5899,6 +6236,33 @@ function printBillDirect(){
   });
   var subDue = subTotal - subPaid;
 
+  // Payments received — each payment as its own row with date + collecting division
+  var docPays = (state.payments||[]).filter(function(p){ return p.doctor===d.name; })
+    .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+  var paysHTML = '';
+  if(docPays.length){
+    var payRows='', payTotal=0;
+    docPays.forEach(function(p,i){
+      var div  = paymentDivision(p);
+      var dstr = p.date ? new Date(p.date+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+      var bg   = i%2===0 ? '#fff' : '#F8FAFC';
+      payTotal += Number(p.amount||0);
+      payRows += '<tr style="background:'+bg+'">'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9">'+dstr+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:'+(div==='Porcelain'?'#D4A017':div==='Zirconia'?'#00B4D8':'#64748B')+';font-weight:700">'+(div||'—')+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right;color:#00C896;font-weight:700">'+fmt(p.amount)+' EGP</td>'
+        + '</tr>';
+    });
+    paysHTML = '<div style="margin-top:14px">'
+      + '<div style="font-size:.75em;color:#64748B;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:4px">Payments Received</div>'
+      + '<table><thead><tr><th>Date</th><th>Division</th><th style="text-align:right">Amount</th></tr></thead><tbody>'
+      + payRows
+      + '<tr class="total-row">'
+      + '<td colspan="2" style="padding:6px 8px">TOTAL PAYMENTS</td>'
+      + '<td style="padding:6px 8px;text-align:right;color:#00C896">'+fmt(payTotal)+' EGP</td>'
+      + '</tr></tbody></table></div>';
+  }
+
   var printHTML = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
     + '<title>Bill — '+d.name+'</title>'
     + '<style>'
@@ -5946,8 +6310,20 @@ function printBillDirect(){
         + '<td style="padding:6px 8px;text-align:right">'+fmt(subTotal)+' EGP</td>'
         + '<td style="padding:6px 8px;text-align:right;color:#00C896">'+fmt(subPaid)+' EGP</td>'
         + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(subDue)+' EGP</td>'
-        + '</tr></tbody></table>'
+        + '</tr>'
+        + (Number(pbFin.prepaid||0)>0
+          ? '<tr class="total-row">'
+            + '<td colspan="6" style="padding:6px 8px;text-align:right">PREPAID CREDIT</td>'
+            + '<td style="padding:6px 8px;text-align:right;color:#00C896">−'+fmt(pbFin.prepaid)+' EGP</td>'
+            + '</tr>'
+            + '<tr class="total-row">'
+            + '<td colspan="6" style="padding:6px 8px;text-align:right">NET DUE</td>'
+            + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(Math.max(0,subDue-Number(pbFin.prepaid||0)))+' EGP</td>'
+            + '</tr>'
+          : '')
+        + '</tbody></table>'
       : '<p style="text-align:center;color:#64748B;padding:20px">No outstanding orders.</p>')
+    + paysHTML
     + '<div class="foot">Al-Azizi Dental Lab &nbsp;|&nbsp; Damanhour, Egypt &nbsp;|&nbsp; +20 120 360 5552</div></body></html>';
 
   var win = window.open('','_blank','width=800,height=1100');
@@ -7459,7 +7835,8 @@ function renderScanPage(){
   var weekEl=document.getElementById('scan-week-view');
   var listEl=document.getElementById('scan-list');
   if(!weekEl||!listEl) return;
-  var now=new Date(),dow=(now.getDay()+6)%7;
+  // Egyptian week: Saturday → Friday (Friday is the weekend)
+  var now=new Date(),dow=(now.getDay()+1)%7;
   var wS=new Date(now); wS.setDate(now.getDate()-dow);
   var wE=new Date(wS); wE.setDate(wS.getDate()+6);
   var wsS=localDate(wS),weS=localDate(wE),mS=t.slice(0,7);
@@ -7469,14 +7846,14 @@ function renderScanPage(){
   ss('scan-stat-pending',list.filter(function(s){ return s.status==='Scheduled'&&s.date>=t; }).length);
   ss('scan-stat-noshow', list.filter(function(s){ return s.status==='No Show'&&s.date.slice(0,7)===mS; }).length);
   var base=new Date(); base.setDate(base.getDate()+scanWeekOffset*7);
-  var mon=new Date(base); mon.setDate(base.getDate()-((base.getDay()+6)%7));
-  var dayN=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],wHtml='';
+  var sat=new Date(base); sat.setDate(base.getDate()-((base.getDay()+1)%7));
+  var dayN=['Sat','Sun','Mon','Tue','Wed','Thu','Fri'],wHtml='';
   for(var d=0;d<7;d++){
-    var dd=new Date(mon); dd.setDate(mon.getDate()+d);
-    var ds=localDate(dd),isT=ds===t;
+    var dd=new Date(sat); dd.setDate(sat.getDate()+d);
+    var ds=localDate(dd),isT=ds===t,isWknd=d===6;
     var sc=list.filter(function(s){ return s.date===ds; });
     var dots=sc.map(function(s){ var c=s.status==='Completed'?'var(--green)':s.status==='No Show'?'#FF4C6A':s.status==='Cancelled'?'var(--gray)':'var(--cyan)'; return '<div style="width:6px;height:6px;border-radius:50%;background:'+c+';margin:1px auto"></div>'; }).join('');
-    wHtml+='<div data-date="'+ds+'" class="scan-day-cell" style="cursor:pointer;padding:8px 4px;border-radius:8px;text-align:center;border:2px solid '+(isT?'var(--cyan)':'var(--border)')+';background:'+(isT?'rgba(0,180,216,.08)':'var(--off)')+'"><div style="font-size:.58rem;color:var(--gray);text-transform:uppercase">'+dayN[d]+'</div><div style="font-size:.85rem;font-weight:'+(isT?800:600)+';color:'+(isT?'var(--cyan)':'var(--navy)')+'">'+dd.getDate()+'</div>'+(dots?'<div style="margin-top:2px">'+dots+'</div>':'<div style="height:8px"></div>')+(sc.length?'<div style="font-size:.55rem;color:var(--gray)">'+sc.length+'x</div>':'')+'</div>';
+    wHtml+='<div data-date="'+ds+'" class="scan-day-cell" style="cursor:pointer;padding:8px 4px;border-radius:8px;text-align:center;'+(isWknd&&!isT?'opacity:.55;':'')+'border:2px solid '+(isT?'var(--cyan)':'var(--border)')+';background:'+(isT?'rgba(0,180,216,.08)':'var(--off)')+'"><div style="font-size:.58rem;color:'+(isWknd?'#FF4C6A':'var(--gray)')+';text-transform:uppercase">'+dayN[d]+(isWknd?' 🌙':'')+'</div><div style="font-size:.85rem;font-weight:'+(isT?800:600)+';color:'+(isT?'var(--cyan)':'var(--navy)')+'">'+dd.getDate()+'</div>'+(dots?'<div style="margin-top:2px">'+dots+'</div>':'<div style="height:8px"></div>')+(sc.length?'<div style="font-size:.55rem;color:var(--gray)">'+sc.length+'x</div>':'')+'</div>';
   }
   weekEl.innerHTML=wHtml;
   weekEl.querySelectorAll('.scan-day-cell').forEach(function(el){ el.addEventListener('click',function(){ var df=document.getElementById('scan-date-filter'); if(df){ df.value=this.dataset.date; renderScanPage(); } }); });
