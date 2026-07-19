@@ -2304,7 +2304,7 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
 <div class="modal-bg" id="pay-salary-modal">
   <div class="modal" style="max-width:420px">
     <div class="modal-hdr">
-      <h3>Pay Salary</h3>
+      <h3 id="pay-salary-title">Pay Salary</h3>
       <button class="modal-close" onclick="closeModal('pay-salary-modal')">&#x2715;</button>
     </div>
     <div class="form-grid">
@@ -2330,7 +2330,7 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
     </div>
     <div class="form-actions">
       <button class="btn btn-ghost" onclick="closeModal('pay-salary-modal')">Cancel</button>
-      <button class="btn btn-primary" style="background:var(--green)" onclick="confirmPaySalary()">Confirm Payment</button>
+      <button class="btn btn-primary" id="ps-confirm-btn" style="background:var(--green)" onclick="confirmPaySalary()">Confirm Payment</button>
     </div>
   </div>
 </div>
@@ -3007,14 +3007,20 @@ function renderSalaries(){
   if(!sorted.length){
     histEl.innerHTML='<div style="padding:16px;text-align:center;color:var(--gray);font-size:.75rem">No payments recorded yet</div>';
   } else {
+    const isOwnerSal = currentUser && currentUser.role==='owner';
     histEl.innerHTML = sorted.slice(0,20).map(h=>{
       const emp = state.users.find(u=>u.id===h.userId);
       return '<div class="salary-hist-row">'
         +'<div><strong style="color:var(--navy)">'+(emp?emp.name:h.userId)+'</strong>'
         +(h.note?'<div style="font-size:.65rem;color:var(--gray)">'+h.note+'</div>':'')
+        +(h.editedAt?'<div style="font-size:.6rem;color:var(--gold)">✏️ edited '+h.editedAt+'</div>':'')
         +'</div>'
         +'<div style="text-align:center"><span style="font-size:.65rem;background:var(--off);padding:2px 8px;border-radius:20px;color:var(--gray)">'+h.month+'</span></div>'
         +'<strong style="color:var(--green)">'+fmt(h.amount)+' EGP</strong>'
+        +(isOwnerSal?'<div style="display:flex;gap:4px;margin-left:8px">'
+          +'<button class="btn btn-ghost btn-sm" style="padding:3px 8px" title="Edit" onclick="openEditSalary(\''+h.id+'\')">✏️</button>'
+          +'<button class="btn btn-sm" style="padding:3px 8px;background:rgba(255,76,106,.1);color:#FF4C6A;border:1px solid rgba(255,76,106,.2)" title="Delete" onclick="deleteSalaryRecord(\''+h.id+'\')">🗑</button>'
+          +'</div>':'')
         +'</div>';
     }).join('');
   }
@@ -3022,7 +3028,13 @@ function renderSalaries(){
   renderAdvancesList();
 }
 
+let editingSalaryId = null;
+
 function openPaySalaryModal(userId){
+  editingSalaryId = null;
+  document.getElementById('pay-salary-title').textContent = 'Pay Salary';
+  document.getElementById('ps-confirm-btn').textContent = 'Confirm Payment';
+  document.getElementById('ps-note').value = '';
   // Populate employees
   const sel = document.getElementById('ps-employee');
   sel.innerHTML = state.users
@@ -3072,13 +3084,56 @@ function confirmPaySalary(){
   if(!userId||!amount){ alert('Please fill all required fields.'); return; }
 
   const history = loadSalaryHistory();
+  const emp = state.users.find(u=>u.id===userId);
+
+  if(editingSalaryId){
+    // Admin-only correction of an existing salary payment
+    if(!(currentUser && currentUser.role==='owner')){ alert('Only the admin can edit salary payments.'); return; }
+    const rec = history.find(h=>h.id===editingSalaryId);
+    if(!rec){ alert('Salary record not found.'); editingSalaryId=null; return; }
+    rec.userId = userId; rec.month = month; rec.amount = amount; rec.note = note;
+    rec.editedAt = today(); rec.editedBy = currentUser.name;
+    saveSalaryHistory(history);
+    save();
+    addNotif('paid', 'Salary Payment Edited — '+(emp?emp.name:''), fmt(amount)+' EGP for '+month);
+    editingSalaryId = null;
+    closeModal('pay-salary-modal');
+    renderSalaries();
+    return;
+  }
+
   history.push({ id:uid(), userId, month, amount, note, date:today() });
   saveSalaryHistory(history);
   save();
 
-  const emp = state.users.find(u=>u.id===userId);
   addNotif('paid', 'Salary Paid — '+(emp?emp.name:''), fmt(amount)+' EGP for '+month);
   closeModal('pay-salary-modal');
+  renderSalaries();
+}
+
+function openEditSalary(id){
+  if(!(currentUser && currentUser.role==='owner')){ alert('Only the admin can edit salary payments.'); return; }
+  const rec = loadSalaryHistory().find(h=>h.id===id);
+  if(!rec){ alert('Salary record not found.'); return; }
+  openPaySalaryModal(rec.userId);
+  editingSalaryId = id;
+  document.getElementById('ps-month').value  = rec.month||'';
+  document.getElementById('ps-amount').value = rec.amount||0;
+  document.getElementById('ps-note').value   = rec.note||'';
+  document.getElementById('pay-salary-title').textContent = 'Edit Salary Payment';
+  document.getElementById('ps-confirm-btn').textContent = 'Save Changes';
+}
+
+function deleteSalaryRecord(id){
+  if(!(currentUser && currentUser.role==='owner')){ alert('Only the admin can delete salary payments.'); return; }
+  const history = loadSalaryHistory();
+  const rec = history.find(h=>h.id===id);
+  if(!rec) return;
+  const emp = state.users.find(u=>u.id===rec.userId);
+  if(!confirm('Delete salary payment of '+fmt(rec.amount)+' EGP for '+(emp?emp.name:'?')+' ('+rec.month+')?\nExpense reports for both divisions will update automatically.')) return;
+  saveSalaryHistory(history.filter(h=>h.id!==id));
+  save();
+  addNotif('paid', 'Salary Payment Deleted — '+(emp?emp.name:''), fmt(rec.amount)+' EGP for '+rec.month);
   renderSalaries();
 }
 
