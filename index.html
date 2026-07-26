@@ -2241,6 +2241,14 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
         </tr></tfoot>
       </table>
     </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:.7rem;flex-wrap:wrap">
+      <span style="color:var(--gray);font-weight:600">Report period:</span>
+      <select id="bill-period-mode" style="padding:5px 10px;border:1px solid var(--border);border-radius:8px;font-size:.72rem;background:var(--off);outline:none">
+        <option value="fin0">This month (5th → 4th) + previous balance</option>
+        <option value="fin-1">Last month (5th → 4th) + previous balance</option>
+        <option value="full">Full statement — entire balance</option>
+      </select>
+    </div>
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:.7rem">
       <span style="color:var(--gray);font-weight:600">Print size:</span>
       <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="bill-print-size" value="A4" checked/> A4</label>
@@ -3145,6 +3153,35 @@ function loadExpenses(){
 }
 function saveExpenses(e){ localStorage.setItem('alazizi_expenses', JSON.stringify(e)); }
 
+// Deleted-expense tombstones: without them a device that still holds a deleted
+// entry would resurrect it on merge. Capped at the 500 most recent.
+function loadExpenseTombstones(){
+  try{ return JSON.parse(localStorage.getItem('alazizi_expenses_deleted')||'[]'); }
+  catch(e){ return []; }
+}
+function saveExpenseTombstones(t){ localStorage.setItem('alazizi_expenses_deleted', JSON.stringify(t.slice(-500))); }
+
+// Merge cloud expenses into local by id instead of overwriting — a device that
+// booted before its own entries synced must never lose them. Same-id conflicts
+// keep the newer mtime (cloud wins on legacy entries without mtime).
+function mergeExpensesFromCloud(cloudList, cloudDeleted){
+  var tombs = loadExpenseTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  saveExpenseTombstones(tombs);
+  var map = {};
+  (cloudList||[]).forEach(function(e){ if(e && e.id) map[e.id] = e; });
+  loadExpenses().forEach(function(e){
+    if(!e || !e.id) return;
+    var c = map[e.id];
+    if(!c || Number(e.mtime||0) > Number(c.mtime||0)) map[e.id] = e;
+  });
+  var merged = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(e){ return tombs.indexOf(e.id)<0; });
+  merged.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+  saveExpenses(merged);
+  return merged;
+}
+
 let editingExpenseId = null;
 const EXP_ICONS = {Rent:'🏠',Utilities:'💡',Supplies:'🧰',Equipment:'🔧',Salaries:'👤',Other:'📌'};
 const EXP_COLORS = {Rent:'exp-rent',Utilities:'exp-utilities',Supplies:'exp-supplies',Equipment:'exp-equipment',Salaries:'exp-salaries',Other:'exp-other'};
@@ -3645,7 +3682,8 @@ function saveExpense(){
     payCategoryOwner:  type==='income' ? payCategoryOwner  : '',
     expenseDivision: type==='expense' ? expenseDivision : '',
     expenseOwner:    type==='expense' && expenseDivision ? (ownerMap[expenseDivision]||'') : '',
-    createdAt:   new Date().toISOString()
+    createdAt:   new Date().toISOString(),
+    mtime:       Date.now()
   };
 
   // If payment from doctor — update doctor order balances.
@@ -3741,6 +3779,8 @@ function deleteExpense(id){
   }
   const entries = all.filter(e=>e.id!==id);
   saveExpenses(entries);
+  const tombs = loadExpenseTombstones();
+  if(tombs.indexOf(id)<0){ tombs.push(id); saveExpenseTombstones(tombs); }
   save();
   renderExpenses();
   if(isDocPay){ renderFinance(); renderDashboard(); renderOrders(); }
@@ -4252,6 +4292,24 @@ function doctorFin(name){
 function totalPrepaid(){
   return (state.doctors||[]).reduce(function(s,d){ return s+Number(d.prepaid||0); },0);
 }
+// ── FINANCIAL MONTH ── the lab's billing month runs from the 5th to the 4th
+// of the next month, so "July" = 5 Jul → 4 Aug.
+var FIN_MONTH_START_DAY = 5;
+function localISODate(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function finMonthRange(offset){
+  var now = new Date();
+  var m = now.getMonth() + (now.getDate()<FIN_MONTH_START_DAY ? -1 : 0) + (offset||0);
+  var start = new Date(now.getFullYear(), m,   FIN_MONTH_START_DAY);
+  var end   = new Date(now.getFullYear(), m+1, FIN_MONTH_START_DAY); // exclusive
+  var last  = new Date(end.getTime()-86400000);
+  return {
+    startStr: localISODate(start),
+    endStr:   localISODate(end),
+    label:    start.toLocaleDateString('en-GB',{month:'long',year:'numeric'}),
+    rangeLabel: start.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' – '+last.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})
+  };
+}
+function orderDateISO(o){ return String(o.due||o.createdAt||'').slice(0,10); }
 // Division that collected a payment: from its linked income entry, else from the note text
 function paymentDivision(p){
   try{
@@ -5516,7 +5574,16 @@ function buildBillText(){
   const prevMonthLabel = prevDate.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
 
   const allOrders   = state.orders.filter(o=>o.doctor===d.name);
-  const orders      = allOrders.filter(o=>o.payment!=='Paid');
+  const txtModeEl   = document.getElementById('bill-period-mode');
+  const txtMode     = txtModeEl ? txtModeEl.value : 'fin0';
+  const isMonthly   = txtMode!=='full';
+  const range       = isMonthly ? finMonthRange(txtMode==='fin-1'?-1:0) : null;
+  const orders      = isMonthly
+    ? allOrders.filter(o=>{ const ds=orderDateISO(o); return ds>=range.startStr && ds<range.endStr; })
+    : allOrders.filter(o=>o.payment!=='Paid');
+  const prevBalance = isMonthly
+    ? allOrders.filter(o=>orderDateISO(o)<range.startStr).reduce((s,o)=>s+Number(o.price||0)-Number(o.paid||0),0)
+    : 0;
   const prevOrders  = allOrders.filter(o=>(o.due||o.createdAt||'').slice(0,7)===prevMonth);
 
   const txtFin      = doctorFin(d.name);
@@ -5544,21 +5611,34 @@ function buildBillText(){
 `;
 
   // Balance summary
-  text += `💰 *Account Summary*
+  if(isMonthly){
+    const mGrandDue = prevBalance + totalDue - txtCredit;
+    text += `💰 *${range.label} Statement* (${range.rangeLabel})
 `;
-  text += `Total Invoiced: ${fmt(allInvoiced)} EGP
+    text += `رصيد سابق Previous Balance: ${fmt(prevBalance)} EGP
 `;
-  text += `Total Paid:     ${fmt(allPaid)} EGP
+    text += `${range.label} Invoiced: ${fmt(subtotal)} EGP
 `;
-  text += `*Outstanding:   ${fmt(allDue)} EGP*
+    text += `*Total Balance Due: ${fmt(mGrandDue)} EGP*
 `;
+  } else {
+    text += `💰 *Account Summary*
+`;
+    text += `Total Invoiced: ${fmt(allInvoiced)} EGP
+`;
+    text += `Total Paid:     ${fmt(allPaid)} EGP
+`;
+    text += `*Outstanding:   ${fmt(allDue)} EGP*
+`;
+  }
   text += `━━━━━━━━━━━━━━━━━━━━━━━
 
 `;
 
   // Current outstanding orders
   if(orders.length){
-    text += `📋 *Current Outstanding Orders*
+    text += isMonthly ? `📋 *${range.label} Cases*
+` : `📋 *Current Outstanding Orders*
 `;
     orders.forEach((o,i)=>{
       const due = Number(o.price||0)-Number(o.paid||0);
@@ -5579,10 +5659,11 @@ function buildBillText(){
 
   // Payments received
   const txtPayments = (state.payments||[]).filter(p=>p.doctor===d.name)
+    .filter(p=>!isMonthly || (String(p.date||'').slice(0,10)>=range.startStr && String(p.date||'').slice(0,10)<range.endStr))
     .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   if(txtPayments.length){
     text += `
-💳 *Payments Received*
+💳 *Payments Received${isMonthly?' — '+range.label:''}*
 `;
     txtPayments.forEach((p,i)=>{
       const div  = paymentDivision(p);
@@ -5592,8 +5673,9 @@ function buildBillText(){
     });
   }
 
-  // Previous month orders
-  if(prevOrders.length){
+  // Previous month orders (full-statement mode only — monthly reports carry
+  // the previous months as one balance line instead)
+  if(!isMonthly && prevOrders.length){
     text += `
 📅 *Previous Cycle (${prevMonthLabel})*
 `;
@@ -6268,9 +6350,30 @@ function printBillDirect(){
   var allDue          = pbFin.due;
   var now             = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
 
+  // Report period: financial month (5th → 4th) with the previous balance
+  // carried as line one, or the full all-time statement
+  var modeEl    = document.getElementById('bill-period-mode');
+  var mode      = modeEl ? modeEl.value : 'fin0';
+  var isMonthly = mode!=='full';
+  var range     = isMonthly ? finMonthRange(mode==='fin-1'?-1:0) : null;
+  var listOrders = isMonthly
+    ? allOrders.filter(function(o){ var ds=orderDateISO(o); return ds>=range.startStr && ds<range.endStr; })
+    : outstandingOrds;
+  var prevBalance = isMonthly
+    ? allOrders.filter(function(o){ return orderDateISO(o)<range.startStr; })
+        .reduce(function(s,o){ return s+Number(o.price||0)-Number(o.paid||0); },0)
+    : 0;
+
   var rows = '';
   var subTotal=0, subPaid=0;
-  outstandingOrds.forEach(function(o,i){
+  if(isMonthly && prevBalance!==0){
+    rows += '<tr style="background:#FFF7ED">'
+      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;font-weight:700">—</td>'
+      + '<td colspan="5" style="padding:5px 8px;border-bottom:1px solid #F1F5F9;font-weight:800">Previous balance due — رصيد سابق (before '+range.rangeLabel.split(' – ')[0]+')</td>'
+      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right;color:'+(prevBalance>0?'#FF4C6A':'#00C896')+';font-weight:800">'+fmt(prevBalance)+'</td>'
+      + '</tr>';
+  }
+  listOrders.forEach(function(o,i){
     var price = Number(o.price||0);
     var paid  = Number(o.paid||0);
     var due   = price - paid;
@@ -6290,10 +6393,12 @@ function printBillDirect(){
       + '</tr>';
   });
   var subDue = subTotal - subPaid;
+  var grandDue = isMonthly ? prevBalance + subDue - Number(pbFin.prepaid||0) : allDue;
 
   // Payments received — each payment as its own row with date + collecting division
   var docPays = (state.payments||[]).filter(function(p){ return p.doctor===d.name; })
     .sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+  if(isMonthly) docPays = docPays.filter(function(p){ var ds=String(p.date||'').slice(0,10); return ds>=range.startStr && ds<range.endStr; });
   var paysHTML = '';
   if(docPays.length){
     var payRows='', payTotal=0;
@@ -6309,7 +6414,7 @@ function printBillDirect(){
         + '</tr>';
     });
     paysHTML = '<div style="margin-top:14px">'
-      + '<div style="font-size:.75em;color:#64748B;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:4px">Payments Received</div>'
+      + '<div style="font-size:.75em;color:#64748B;text-transform:uppercase;letter-spacing:.08em;font-weight:700;margin-bottom:4px">Payments Received'+(isMonthly?' — '+range.label:'')+'</div>'
       + '<table><thead><tr><th>Date</th><th>Division</th><th style="text-align:right">Amount</th></tr></thead><tbody>'
       + payRows
       + '<tr class="total-row">'
@@ -6340,8 +6445,9 @@ function printBillDirect(){
     +     '<div style="color:#64748B;font-size:.8em">Damanhour, Egypt &nbsp;|&nbsp; +20 120 360 5552</div>'
     +   '</div>'
     +   '<div style="text-align:right">'
-    +     '<div style="font-size:1.6em;font-weight:800;color:#00B4D8">BILL</div>'
+    +     '<div style="font-size:1.6em;font-weight:800;color:#00B4D8">'+(isMonthly?'MONTHLY BILL':'FULL STATEMENT')+'</div>'
     +     '<div style="color:#64748B;font-size:.8em">'+now+'</div>'
+    +     (isMonthly?'<div style="color:#0F172A;font-size:.85em;font-weight:700">'+range.label+' ('+range.rangeLabel+')</div>':'')
     +   '</div>'
     + '</div>'
     + '<div style="margin-bottom:14px">'
@@ -6351,17 +6457,21 @@ function printBillDirect(){
     +   '<div style="color:#64748B;font-size:.85em">Payment Term: '+(d.term||'On Delivery')+'</div>'
     + '</div>'
     + '<div class="sum">'
-    +   '<div class="scard"><div class="slabel">Total Invoiced</div><div class="sval">'+fmt(allInvoiced)+' EGP</div></div>'
-    +   '<div class="scard"><div class="slabel">Total Paid</div><div class="sval" style="color:#00C896">'+fmt(allPaid)+' EGP</div></div>'
-    +   '<div class="scard"><div class="slabel">Outstanding</div><div class="sval" style="color:#FF4C6A">'+fmt(allDue)+' EGP</div></div>'
+    + (isMonthly
+      ?   '<div class="scard"><div class="slabel">Previous Balance</div><div class="sval" style="color:'+(prevBalance>0?'#FF4C6A':'#00C896')+'">'+fmt(prevBalance)+' EGP</div></div>'
+        + '<div class="scard"><div class="slabel">'+range.label+' Invoiced</div><div class="sval">'+fmt(subTotal)+' EGP</div></div>'
+        + '<div class="scard"><div class="slabel">Total Balance Due</div><div class="sval" style="color:'+(grandDue>0?'#FF4C6A':'#00C896')+'">'+fmt(grandDue)+' EGP</div></div>'
+      :   '<div class="scard"><div class="slabel">Total Invoiced</div><div class="sval">'+fmt(allInvoiced)+' EGP</div></div>'
+        + '<div class="scard"><div class="slabel">Total Paid</div><div class="sval" style="color:#00C896">'+fmt(allPaid)+' EGP</div></div>'
+        + '<div class="scard"><div class="slabel">Outstanding</div><div class="sval" style="color:#FF4C6A">'+fmt(allDue)+' EGP</div></div>')
     + '</div>'
-    + (outstandingOrds.length
+    + ((listOrders.length || (isMonthly && prevBalance!==0))
       ? '<table><thead><tr><th>#</th><th>Service</th><th>Patient</th><th>Date</th>'
         + '<th style="text-align:right">Price</th><th style="text-align:right">Paid</th>'
         + '<th style="text-align:right">Due</th></tr></thead><tbody>'
         + rows
         + '<tr class="total-row">'
-        + '<td colspan="4" style="padding:6px 8px">TOTAL DUE</td>'
+        + '<td colspan="4" style="padding:6px 8px">'+(isMonthly?range.label.toUpperCase()+' TOTAL':'TOTAL DUE')+'</td>'
         + '<td style="padding:6px 8px;text-align:right">'+fmt(subTotal)+' EGP</td>'
         + '<td style="padding:6px 8px;text-align:right;color:#00C896">'+fmt(subPaid)+' EGP</td>'
         + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(subDue)+' EGP</td>'
@@ -6371,13 +6481,20 @@ function printBillDirect(){
             + '<td colspan="6" style="padding:6px 8px;text-align:right">PREPAID CREDIT</td>'
             + '<td style="padding:6px 8px;text-align:right;color:#00C896">−'+fmt(pbFin.prepaid)+' EGP</td>'
             + '</tr>'
-            + '<tr class="total-row">'
-            + '<td colspan="6" style="padding:6px 8px;text-align:right">NET DUE</td>'
-            + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(Math.max(0,subDue-Number(pbFin.prepaid||0)))+' EGP</td>'
-            + '</tr>'
           : '')
+        + (isMonthly
+          ? '<tr class="total-row">'
+            + '<td colspan="6" style="padding:6px 8px;text-align:right">TOTAL BALANCE DUE — الإجمالي المستحق</td>'
+            + '<td style="padding:6px 8px;text-align:right;color:'+(grandDue>0?'#FF4C6A':'#00C896')+'">'+fmt(grandDue)+' EGP</td>'
+            + '</tr>'
+          : (Number(pbFin.prepaid||0)>0
+            ? '<tr class="total-row">'
+              + '<td colspan="6" style="padding:6px 8px;text-align:right">NET DUE</td>'
+              + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(Math.max(0,subDue-Number(pbFin.prepaid||0)))+' EGP</td>'
+              + '</tr>'
+            : ''))
         + '</tbody></table>'
-      : '<p style="text-align:center;color:#64748B;padding:20px">No outstanding orders.</p>')
+      : '<p style="text-align:center;color:#64748B;padding:20px">'+(isMonthly?'No cases in this period.':'No outstanding orders.')+'</p>')
     + paysHTML
     + '<div class="foot">Al-Azizi Dental Lab &nbsp;|&nbsp; Damanhour, Egypt &nbsp;|&nbsp; +20 120 360 5552</div></body></html>';
 
@@ -6865,6 +6982,8 @@ async function syncToSupabase(){
       var chkRows = await chkRes.json();
       if(chkRows.length && chkRows[0].data){
         var cloudNow = JSON.parse(chkRows[0].data);
+        // Never push a blob that drops expenses another device already synced
+        mergeExpensesFromCloud(cloudNow.expenses, cloudNow.expensesDeleted);
         var co=(cloudNow.orders||[]).length, cd=(cloudNow.doctors||[]).length;
         var lo=(state.orders||[]).length,  ld=(state.doctors||[]).length;
         var cs=(cloudNow.scanSchedule||[]).length, ls=(state.scanSchedule||[]).length;
@@ -6891,6 +7010,7 @@ async function syncToSupabase(){
         pricelist:     state.pricelist||[],
         nextOrderId:   state.nextOrderId||1,
         expenses:      loadExpenses(),
+        expensesDeleted: loadExpenseTombstones(),
         advances:      loadAdvances(),
         deductions:    loadDeductions(),
         salaryHistory: loadSalaryHistory()
@@ -6919,7 +7039,7 @@ async function loadFromSupabase(){
       if(saved.scanSchedule)  state.scanSchedule = saved.scanSchedule;
       if(saved.pricelist)     state.pricelist    = saved.pricelist;
       if(saved.nextOrderId)   state.nextOrderId  = saved.nextOrderId;
-      if(saved.expenses)      localStorage.setItem('alazizi_expenses',   JSON.stringify(saved.expenses));
+      mergeExpensesFromCloud(saved.expenses, saved.expensesDeleted);
       if(saved.advances)      localStorage.setItem('alazizi_advances',   JSON.stringify(saved.advances));
       if(saved.deductions)    localStorage.setItem('alazizi_deductions', JSON.stringify(saved.deductions));
       if(saved.salaryHistory) localStorage.setItem('alazizi_salaries',   JSON.stringify(saved.salaryHistory));
