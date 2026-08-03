@@ -3182,6 +3182,58 @@ function mergeExpensesFromCloud(cloudList, cloudDeleted){
   return merged;
 }
 
+// ── ORDER/PAYMENT MERGE — never overwrite wholesale (Aug 2, 2026 incident) ──
+function loadOrderTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_orders_deleted')||'[]'); }catch(e){ return []; } }
+function saveOrderTombstones(t){ localStorage.setItem('alazizi_orders_deleted', JSON.stringify(t.slice(-500))); }
+function loadPaymentTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_payments_deleted')||'[]'); }catch(e){ return []; } }
+function savePaymentTombstones(t){ localStorage.setItem('alazizi_payments_deleted', JSON.stringify(t.slice(-500))); }
+function mergeOrdersFromCloud(cloudOrders, cloudDeleted, cloudPayments, cloudPaymentsDeleted, cloudNextId){
+  var tombs = loadOrderTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  saveOrderTombstones(tombs);
+  var map = {};
+  (cloudOrders||[]).forEach(function(o){ if(o && o.id) map[o.id] = o; });
+  (state.orders||[]).forEach(function(o){
+    if(!o || !o.id) return;
+    var c = map[o.id];
+    if(!c || Number(o.mtime||0) >= Number(c.mtime||0)) map[o.id] = o;
+  });
+  state.orders = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(o){ return tombs.indexOf(o.id)<0; });
+  state.orders.sort(function(a,b){ return (a.createdAt||'').localeCompare(b.createdAt||''); });
+  var ptombs = loadPaymentTombstones();
+  (cloudPaymentsDeleted||[]).forEach(function(id){ if(id && ptombs.indexOf(id)<0) ptombs.push(id); });
+  savePaymentTombstones(ptombs);
+  var pmap = {};
+  (cloudPayments||[]).forEach(function(p){ if(p && p.id) pmap[p.id] = p; });
+  (state.payments||[]).forEach(function(p){ if(p && p.id) pmap[p.id] = p; });
+  state.payments = Object.keys(pmap).map(function(k){ return pmap[k]; })
+    .filter(function(p){ return ptombs.indexOf(p.id)<0; });
+  state.payments.sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+  // the order counter must never move backwards, even across offline devices
+  state.nextOrderId = Math.max(Number(state.nextOrderId||1), Number(cloudNextId||1));
+}
+
+// ── SYNC FAILURE BANNER — a failed cloud save must be impossible to miss ──
+function showSyncError(){
+  var b=document.getElementById('sync-error-banner');
+  if(!b){
+    b=document.createElement('div');
+    b.id='sync-error-banner';
+    b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#c62828;color:#fff;font-weight:700;text-align:center;padding:10px 16px;font-size:15px;box-shadow:0 2px 10px rgba(0,0,0,.45);direction:rtl';
+    document.body.appendChild(b);
+  }
+  b.textContent='⚠️ فشل الحفظ على السحابة — تحقق من الإنترنت فوراً! الشغل محفوظ على هذا الجهاز فقط وسيُرفع تلقائياً عند عودة الاتصال — CLOUD SAVE FAILED';
+  b.style.display='block';
+  if(!window._syncRetryTimer){
+    window._syncRetryTimer=setInterval(function(){
+      var bb=document.getElementById('sync-error-banner');
+      if(bb && bb.style.display!=='none' && SB_ONLINE){ save(); }
+    },60000);
+  }
+}
+function clearSyncError(){ var b=document.getElementById('sync-error-banner'); if(b) b.style.display='none'; }
+
 let editingExpenseId = null;
 const EXP_ICONS = {Rent:'🏠',Utilities:'💡',Supplies:'🧰',Equipment:'🔧',Salaries:'👤',Other:'📌'};
 const EXP_COLORS = {Rent:'exp-rent',Utilities:'exp-utilities',Supplies:'exp-supplies',Equipment:'exp-equipment',Salaries:'exp-salaries',Other:'exp-other'};
@@ -4337,6 +4389,7 @@ function reversePaymentRecord(p){
       var take=Math.min(Number(o.paid||0),Number(a.amount||0));
       o.paid=Number(o.paid||0)-take; remaining-=take;
       o.payment=o.paid>=Number(o.price||0)?'Paid':o.paid>0?'Partial':'Unpaid';
+      o.mtime=Date.now();
     });
   }
   var d=state.doctors.find(function(x){ return x.name===p.doctor; });
@@ -4351,6 +4404,7 @@ function reversePaymentRecord(p){
       var take2=Math.min(Number(o2.paid||0),remaining);
       o2.paid=Number(o2.paid||0)-take2; remaining-=take2;
       o2.payment=o2.paid>=Number(o2.price||0)?'Paid':o2.paid>0?'Partial':'Unpaid';
+      o2.mtime=Date.now();
     }
   }
 }
@@ -4765,7 +4819,8 @@ async function saveOrder(){
     division:(document.querySelector('input[name="o-division"]:checked')?.value)||'',
     isRemake,
     createdAt: editingOrderId ? (state.orders.find(x=>x.id===editingOrderId)||{}).createdAt : new Date().toISOString(),
-    assignedTo: document.getElementById('o-assigned-to')?.value || (editingOrderId ? (state.orders.find(x=>x.id===editingOrderId)||{}).assignedTo : '') || ''
+    assignedTo: document.getElementById('o-assigned-to')?.value || (editingOrderId ? (state.orders.find(x=>x.id===editingOrderId)||{}).assignedTo : '') || '',
+    mtime: Date.now()
   };
   if(editingOrderId){
     const prev = state.orders.find(x=>x.id===editingOrderId);
@@ -4840,6 +4895,7 @@ async function saveOrder(){
 function deleteOrder(id){
   if(!can('deleteOrder')){ alert('You do not have permission to delete orders.'); return; }
   if(!confirm('Delete this order?')) return;
+  var _t=loadOrderTombstones(); if(_t.indexOf(id)<0){ _t.push(id); saveOrderTombstones(_t); }
   state.orders=state.orders.filter(x=>x.id!==id);
   save(); renderOrders(); renderDashboard();
 }
@@ -5148,6 +5204,7 @@ function savePayment(){
     const apply=Math.min(due,remaining);
     o.paid=Number(o.paid||0)+apply; remaining-=apply;
     o.payment=o.paid>=o.price?'Paid':o.paid>0?'Partial':'Unpaid';
+    o.mtime=Date.now();
     allocations.push({orderId:o.id,amount:apply});
   }
   if(orderId==='all'){
@@ -5195,6 +5252,7 @@ function deletePaymentRecord(pid){
   var p=state.payments[idx];
   if(!confirm('Delete this payment of '+fmt(p.amount)+' EGP for '+p.doctor+'?\nThe amount will be added back to the doctor\'s outstanding balance.')) return;
   reversePaymentRecord(p);
+  var _pt=loadPaymentTombstones(); if(_pt.indexOf(pid)<0){ _pt.push(pid); savePaymentTombstones(_pt); }
   state.payments.splice(idx,1);
   // If this payment was created from an Expenses income entry, remove that entry too
   var entries=loadExpenses();
@@ -6984,6 +7042,8 @@ async function syncToSupabase(){
         var cloudNow = JSON.parse(chkRows[0].data);
         // Never push a blob that drops expenses another device already synced
         mergeExpensesFromCloud(cloudNow.expenses, cloudNow.expensesDeleted);
+        // Merge orders & payments by id + tombstones so an offline/stale device can never wipe them
+        mergeOrdersFromCloud(cloudNow.orders, cloudNow.ordersDeleted, cloudNow.payments, cloudNow.paymentsDeleted, cloudNow.nextOrderId);
         var co=(cloudNow.orders||[]).length, cd=(cloudNow.doctors||[]).length;
         var lo=(state.orders||[]).length,  ld=(state.doctors||[]).length;
         var cs=(cloudNow.scanSchedule||[]).length, ls=(state.scanSchedule||[]).length;
@@ -7011,6 +7071,8 @@ async function syncToSupabase(){
         nextOrderId:   state.nextOrderId||1,
         expenses:      loadExpenses(),
         expensesDeleted: loadExpenseTombstones(),
+        ordersDeleted:   loadOrderTombstones(),
+        paymentsDeleted: loadPaymentTombstones(),
         advances:      loadAdvances(),
         deductions:    loadDeductions(),
         salaryHistory: loadSalaryHistory()
@@ -7019,8 +7081,9 @@ async function syncToSupabase(){
     };
     await sbUpsert('app_state', blob, 'id');
     localStorage.removeItem('alazizi_sync_pending');
+    clearSyncError();
     console.log('Synced to Supabase');
-  } catch(e){ console.error('Sync error:', e.message); }
+  } catch(e){ console.error('Sync error:', e.message); showSyncError(); }
 }
 
 async function loadFromSupabase(){
@@ -7033,12 +7096,10 @@ async function loadFromSupabase(){
       var saved = JSON.parse(blobs[0].data);
       if(saved.users    && saved.users.length)    state.users    = saved.users;
       if(saved.doctors  && saved.doctors.length)  state.doctors  = saved.doctors;
-      if(saved.orders   && saved.orders.length)   state.orders   = saved.orders;
-      if(saved.payments && saved.payments.length) state.payments = saved.payments;
+      mergeOrdersFromCloud(saved.orders, saved.ordersDeleted, saved.payments, saved.paymentsDeleted, saved.nextOrderId);
       if(saved.services && saved.services.length) state.services = saved.services;
       if(saved.scanSchedule)  state.scanSchedule = saved.scanSchedule;
       if(saved.pricelist)     state.pricelist    = saved.pricelist;
-      if(saved.nextOrderId)   state.nextOrderId  = saved.nextOrderId;
       mergeExpensesFromCloud(saved.expenses, saved.expensesDeleted);
       if(saved.advances)      localStorage.setItem('alazizi_advances',   JSON.stringify(saved.advances));
       if(saved.deductions)    localStorage.setItem('alazizi_deductions', JSON.stringify(saved.deductions));
