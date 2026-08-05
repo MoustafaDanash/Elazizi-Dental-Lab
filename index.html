@@ -3187,6 +3187,19 @@ function loadOrderTombstones(){ try{ return JSON.parse(localStorage.getItem('ala
 function saveOrderTombstones(t){ localStorage.setItem('alazizi_orders_deleted', JSON.stringify(t.slice(-500))); }
 function loadPaymentTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_payments_deleted')||'[]'); }catch(e){ return []; } }
 function savePaymentTombstones(t){ localStorage.setItem('alazizi_payments_deleted', JSON.stringify(t.slice(-500))); }
+// A payment and its Expenses income entry are two halves of one record: deleting
+// either half must tombstone BOTH, otherwise the surviving half is merged back
+// from the cloud on the next sync and reappears as a phantom collection.
+function tombstonePayment(pid){
+  if(!pid) return;
+  var t=loadPaymentTombstones();
+  if(t.indexOf(pid)<0){ t.push(pid); savePaymentTombstones(t); }
+}
+function tombstoneExpense(eid){
+  if(!eid) return;
+  var t=loadExpenseTombstones();
+  if(t.indexOf(eid)<0){ t.push(eid); saveExpenseTombstones(t); }
+}
 function mergeOrdersFromCloud(cloudOrders, cloudDeleted, cloudPayments, cloudPaymentsDeleted, cloudNextId){
   var tombs = loadOrderTombstones();
   (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
@@ -3749,8 +3762,10 @@ function saveExpense(){
         const pIdx = state.payments.findIndex(p=> oldEntry.paymentId ? p.id===oldEntry.paymentId
           : (p.doctor===oldEntry.incomeDoctor && Number(p.amount||0)===Number(oldEntry.amount||0)));
         if(pIdx>=0){
-          reversePaymentRecord(state.payments[pIdx]);
+          const oldPmt = state.payments[pIdx];
+          reversePaymentRecord(oldPmt);
           state.payments.splice(pIdx,1);
+          tombstonePayment(oldPmt.id);
         }
       }
     }
@@ -3825,8 +3840,10 @@ function deleteExpense(id){
     const pIdx = state.payments.findIndex(p=> entry.paymentId ? p.id===entry.paymentId
       : (p.doctor===entry.incomeDoctor && Number(p.amount||0)===Number(entry.amount||0)));
     if(pIdx>=0){
-      reversePaymentRecord(state.payments[pIdx]);
+      const linkedPmt = state.payments[pIdx];
+      reversePaymentRecord(linkedPmt);
       state.payments.splice(pIdx,1);
+      tombstonePayment(linkedPmt.id);
     }
   }
   const entries = all.filter(e=>e.id!==id);
@@ -3835,7 +3852,11 @@ function deleteExpense(id){
   if(tombs.indexOf(id)<0){ tombs.push(id); saveExpenseTombstones(tombs); }
   save();
   renderExpenses();
-  if(isDocPay){ renderFinance(); renderDashboard(); renderOrders(); }
+  if(isDocPay){
+    renderFinance(); renderDashboard(); renderOrders();
+    try{ refreshDoctorViews(entry.incomeDoctor); }catch(e){}
+    if(typeof currentStatsDoctor!=='undefined' && currentStatsDoctor===entry.incomeDoctor) openDoctorStats(entry.incomeDoctor);
+  }
 }
 
 // ── REPORTS ───────────────────────────────────────────────────────────────
@@ -4381,6 +4402,9 @@ function paymentDivision(p){
 // the doctor's most recently paid orders until the amount is recovered.
 function reversePaymentRecord(p){
   if(!p) return;
+  if(p.reversed) return;   // already un-applied once — never claw the money back twice
+  p.reversed = true;
+  var hadAllocations = Array.isArray(p.allocations) && p.allocations.length>0;
   var remaining=Number(p.amount||0);
   if(Array.isArray(p.allocations)){
     p.allocations.forEach(function(a){
@@ -4397,7 +4421,10 @@ function reversePaymentRecord(p){
     var t=Math.min(Number(d.prepaid||0),remaining);
     d.prepaid=Number(d.prepaid||0)-t; remaining-=t;
   }
-  if(remaining>0){
+  // Legacy records only. A record that carried allocations has already given back
+  // exactly what it took; sweeping other orders here would strip payments this
+  // record never made (the ghost-payment double-reversal bug).
+  if(remaining>0 && !hadAllocations){
     var paidOrders=state.orders.filter(function(o){ return o.doctor===p.doctor&&Number(o.paid||0)>0; });
     for(var i=paidOrders.length-1;i>=0&&remaining>0;i--){
       var o2=paidOrders[i];
@@ -5257,12 +5284,30 @@ function deletePaymentRecord(pid){
   // If this payment was created from an Expenses income entry, remove that entry too
   var entries=loadExpenses();
   var kept=entries.filter(function(e){ return e.paymentId!==pid; });
-  if(kept.length!==entries.length){ saveExpenses(kept); }
+  if(kept.length!==entries.length){
+    entries.forEach(function(e){ if(e.paymentId===pid) tombstoneExpense(e.id); });
+    saveExpenses(kept);
+  }
   save();
   renderFinance(); renderDashboard(); renderOrders();
   try{ renderExpenses(); }catch(e){}
   addNotif('cancelled','Payment Deleted — '+p.doctor, fmt(p.amount)+' EGP reversed'+(p.note?' · '+p.note:''));
   if(typeof currentStatsDoctor!=='undefined' && currentStatsDoctor===p.doctor) openDoctorStats(p.doctor);
+  refreshDoctorViews(p.doctor);
+}
+
+// Re-draw every open view that shows a doctor's money, so a deleted payment
+// disappears from the statement/bill too — not just from the balance figure.
+function refreshDoctorViews(doctorName){
+  try{
+    var billOpen = document.getElementById('bill-modal');
+    if(billOpen && billOpen.classList.contains('open')
+       && typeof currentBillDoctor!=='undefined' && currentBillDoctor
+       && currentBillDoctor.name===doctorName){
+      openBill(doctorName);
+    }
+  }catch(e){}
+  try{ renderDoctors(); }catch(e){}
 }
 
 
