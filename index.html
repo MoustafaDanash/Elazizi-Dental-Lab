@@ -3209,7 +3209,10 @@ function mergeOrdersFromCloud(cloudOrders, cloudDeleted, cloudPayments, cloudPay
   (state.orders||[]).forEach(function(o){
     if(!o || !o.id) return;
     var c = map[o.id];
-    if(!c || Number(o.mtime||0) >= Number(c.mtime||0)) map[o.id] = o;
+    // Strictly newer only. On a tie — which is every one of the many legacy
+    // orders that carry no mtime — the cloud copy wins, because a device that
+    // did not touch this order must never overwrite another device's payment.
+    if(!c || Number(o.mtime||0) > Number(c.mtime||0)) map[o.id] = o;
   });
   state.orders = Object.keys(map).map(function(k){ return map[k]; })
     .filter(function(o){ return tombs.indexOf(o.id)<0; });
@@ -3780,6 +3783,9 @@ function saveExpense(){
       o.paid = Number(o.paid||0)+apply;
       remaining -= apply;
       o.payment = o.paid>=o.price?'Paid':o.paid>0?'Partial':'Unpaid';
+      // Without this stamp the merge cannot tell this order changed, and a stale
+      // device silently pushes its older paid amount back over the cloud.
+      o.mtime = Date.now();
       allocations.push({orderId:o.id,amount:apply});
     };
 
@@ -4921,10 +4927,66 @@ async function saveOrder(){
 }
 function deleteOrder(id){
   if(!can('deleteOrder')){ alert('You do not have permission to delete orders.'); return; }
-  if(!confirm('Delete this order?')) return;
+  var victim=(state.orders||[]).find(function(x){ return x.id===id; });
+  // Money already collected against this order must survive its deletion —
+  // otherwise the doctor loses credit for cash they really paid, while the
+  // payment record still shows the full amount.
+  var stranded=releaseAllocationsForOrder(id, victim);
+  var warn='Delete this order?';
+  if(stranded>0){
+    warn='Delete this order?\n\n'+fmt(stranded)+' EGP has already been paid against it.\n'
+       +'That amount will be moved onto '+((victim&&victim.doctor)||'the doctor')
+       +"'s other unpaid orders, and any remainder kept as credit — no money is lost.";
+  }
+  if(!confirm(warn)){ return; }
+  releaseAllocationsForOrder(id, victim, true);
   var _t=loadOrderTombstones(); if(_t.indexOf(id)<0){ _t.push(id); saveOrderTombstones(_t); }
   state.orders=state.orders.filter(x=>x.id!==id);
   save(); renderOrders(); renderDashboard();
+  try{ renderFinance(); }catch(e){}
+  if(victim && victim.doctor){ try{ refreshDoctorViews(victim.doctor); }catch(e){} }
+}
+
+// Detach every payment allocation pointing at an order that is being deleted.
+// With apply=false this only reports the total; with apply=true it rewrites the
+// allocations onto the doctor's remaining unpaid orders (excess becomes prepaid
+// credit) so the doctor's paid total is unchanged by the deletion.
+function releaseAllocationsForOrder(orderId, victim, apply){
+  var total=0;
+  (state.payments||[]).forEach(function(p){
+    if(!Array.isArray(p.allocations)) return;
+    p.allocations.forEach(function(a){
+      if(a && a.orderId===orderId) total+=Number(a.amount||0);
+    });
+  });
+  if(!apply || total<=0) return total;
+
+  var doctorName=(victim&&victim.doctor)||'';
+  (state.payments||[]).forEach(function(p){
+    if(!Array.isArray(p.allocations)) return;
+    var freed=p.allocations.filter(function(a){ return a && a.orderId===orderId; })
+                           .reduce(function(s,a){ return s+Number(a.amount||0); },0);
+    if(freed<=0) return;
+    p.allocations=p.allocations.filter(function(a){ return !(a && a.orderId===orderId); });
+    var remaining=freed;
+    (state.orders||[]).filter(function(o){
+      return o.doctor===(doctorName||p.doctor) && o.id!==orderId && Number(o.paid||0)<Number(o.price||0);
+    }).forEach(function(o){
+      if(remaining<=0) return;
+      var room=Number(o.price||0)-Number(o.paid||0);
+      if(room<=0) return;
+      var take=Math.min(room,remaining);
+      o.paid=Number(o.paid||0)+take; remaining-=take;
+      o.payment=o.paid>=Number(o.price||0)?'Paid':o.paid>0?'Partial':'Unpaid';
+      o.mtime=Date.now();
+      p.allocations.push({orderId:o.id,amount:take});
+    });
+    if(remaining>0){
+      addDoctorPrepaid(doctorName||p.doctor, remaining);
+      p.credited=Number(p.credited||0)+remaining;
+    }
+  });
+  return total;
 }
 
 // ── DOCTOR CRUD ───────────────────────────────────────────────────────────
@@ -5412,6 +5474,45 @@ document.getElementById('auth-screen').style.display='flex';
 document.querySelector('.sidebar').style.visibility='hidden';
 document.querySelector('.main').style.visibility='hidden';
 cloudBoot();
+
+// ── LIVE CLOUD REFRESH ─────────────────────────────────────────────────────
+// The cloud used to be read exactly once, at boot. A tab left open all day kept
+// showing figures another device had already changed, and any save from that
+// stale tab pushed the old numbers back up. Re-pull on a timer and whenever the
+// tab regains focus so the screen tracks the cloud instead of this device.
+var CLOUD_REFRESH_MS = 45000;
+var cloudRefreshBusy = false;
+function financialFingerprint(){
+  return (state.orders||[]).length+'/'+(state.payments||[]).length+'/'
+    +(state.orders||[]).reduce(function(s,o){ return s+Number(o.paid||0); },0)+'/'
+    +(state.doctors||[]).reduce(function(s,d){ return s+Number(d.prepaid||0); },0);
+}
+async function cloudRefresh(){
+  if(!CLOUD_READY || cloudRefreshBusy || !currentUser || !SB_ONLINE) return;
+  // Local work that has not reached the cloud yet must be pushed, not overwritten
+  if(localStorage.getItem('alazizi_sync_pending')==='1') return;
+  // Never yank data out from under an open form
+  if(document.querySelector('.modal-bg.open')) return;
+  cloudRefreshBusy = true;
+  try{
+    var before = financialFingerprint();
+    await loadFromSupabase();
+    if(financialFingerprint() !== before){
+      ['renderDashboard','renderOrders','renderFinance','renderDoctors','renderExpenses']
+        .forEach(function(fn){ try{ if(typeof window[fn]==='function') window[fn](); }catch(e){} });
+      if(typeof showToast==='function') showToast('Updated from cloud','done');
+    }
+  }catch(e){
+    console.warn('cloud refresh failed:', e.message);
+  }finally{
+    cloudRefreshBusy = false;
+  }
+}
+setInterval(cloudRefresh, CLOUD_REFRESH_MS);
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState==='visible') cloudRefresh();
+});
+window.addEventListener('focus', cloudRefresh);
 
 // Lock screen when page becomes hidden (mobile background / tab switch)
 // ── SESSION TIMEOUT — lock after 8 hours of inactivity ─────────────────────
