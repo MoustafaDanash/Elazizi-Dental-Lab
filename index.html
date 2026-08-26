@@ -4355,6 +4355,21 @@ function doctorFin(name){
 function totalPrepaid(){
   return (state.doctors||[]).reduce(function(s,d){ return s+Number(d.prepaid||0); },0);
 }
+// Display label for full-statement order rows — Opening Balance orders read
+// as pre-system debt, not a real order, so they're labeled accordingly.
+function orderRowLabel(o){
+  return o.service==='Opening Balance' ? 'Due Amount from June' : o.service;
+}
+// Full-statement order ordering: Opening Balance always first (it's carried-
+// forward debt, not dated like a real order), then every other order
+// earliest → latest by date.
+function sortFullStatementOrders(orders){
+  return orders.slice().sort(function(a,b){
+    if(a.service==='Opening Balance') return -1;
+    if(b.service==='Opening Balance') return 1;
+    return new Date(a.createdAt||a.due||0) - new Date(b.createdAt||b.due||0);
+  });
+}
 // ── FINANCIAL MONTH ── the lab's billing month runs from the 5th to the 4th
 // of the next month, so "July" = 5 Jul → 4 Aug.
 var FIN_MONTH_START_DAY = 5;
@@ -5589,13 +5604,11 @@ function openBill(doctorName){
 
   const now = new Date();
 
-  // All orders for this doctor, newest first — the statement lists every
-  // order that was made rather than trying to settle/match them individually;
-  // Paid/Due is a doctor-level number only (see BALANCE SUMMARY below), not
-  // something computed per order.
-  const allOrders = state.orders.filter(o=>o.doctor===doctorName)
-    .slice()
-    .sort((a,b)=> new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0));
+  // All orders for this doctor, Opening Balance first then earliest→latest —
+  // the statement lists every order that was made rather than trying to
+  // settle/match them individually; Paid/Due is a doctor-level number only
+  // (see BALANCE SUMMARY below), not something computed per order.
+  const allOrders = sortFullStatementOrders(state.orders.filter(o=>o.doctor===doctorName));
 
   // All-time balance (prepaid credit counts as paid)
   const binFin      = doctorFin(doctorName);
@@ -5654,7 +5667,7 @@ function openBill(doctorName){
       const bg  = i%2===0?'':'background:rgba(0,0,0,.02)';
       const createdDate = o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : (o.due||'—');
       return `<tr style="${bg}">
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:.73rem">${o.orderNum?'#'+o.orderNum:''} ${o.service}</td>
+        <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:.73rem">${o.service==='Opening Balance'?'':(o.orderNum?'#'+o.orderNum:'')} ${orderRowLabel(o)}</td>
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:.73rem;color:var(--gray)">${o.patient||'—'}</td>
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:.68rem;color:var(--gray)">${createdDate}</td>
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;font-size:.73rem">${o.units||1}</td>
@@ -5712,13 +5725,11 @@ function buildBillText(){
   const d = currentBillDoctor;
   const now = new Date();
 
-  // Newest first for full-statement mode — the "full statement" lists every
-  // order that was made rather than settling/matching them individually;
-  // monthly mode (below) is untouched, it already lists cases within the
-  // period with per-case Paid/Due.
-  const allOrders   = state.orders.filter(o=>o.doctor===d.name)
-    .slice()
-    .sort((a,b)=> new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0));
+  // Opening Balance first, then earliest→latest, for full-statement mode —
+  // the "full statement" lists every order that was made rather than
+  // settling/matching them individually; monthly mode (below) is untouched,
+  // it already lists cases within the period with per-case Paid/Due.
+  const allOrders   = sortFullStatementOrders(state.orders.filter(o=>o.doctor===d.name));
   const txtModeEl   = document.getElementById('bill-period-mode');
   const txtMode     = txtModeEl ? txtModeEl.value : 'fin0';
   const isMonthly   = txtMode!=='full';
@@ -5785,7 +5796,7 @@ function buildBillText(){
 ` : `📋 *Orders*
 `;
     orders.forEach((o,i)=>{
-      text += `${i+1}. ${o.service}${o.patient?' ('+o.patient+')':''}
+      text += `${i+1}. ${orderRowLabel(o)}${o.patient?' ('+o.patient+')':''}
 `;
       if(isMonthly){
         const due = Number(o.price||0)-Number(o.paid||0);
@@ -6481,9 +6492,7 @@ function printBillDirect(){
   var baseFt = isA5 ? '9pt' : '11pt';
 
   // Read data from state (same source as openBill; prepaid credit counts as paid)
-  var allOrders = state.orders.filter(function(o){ return o.doctor===d.name; })
-    .slice()
-    .sort(function(a,b){ return new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0); });
+  var allOrders = sortFullStatementOrders(state.orders.filter(function(o){ return o.doctor===d.name; }));
   var pbFin           = doctorFin(d.name);
   var allInvoiced     = pbFin.invoiced;
   var allPaid         = pbFin.paid;
@@ -6537,8 +6546,8 @@ function printBillDirect(){
       // Full statement: every order, one row each — no per-order Paid/Due
       // settling, just what was made and how many units.
       rows += '<tr style="background:'+bg+'">'
-        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;font-weight:700">'+(o.orderNum?'#'+o.orderNum:i+1)+'</td>'
-        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9">'+o.service+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;font-weight:700">'+(o.service==='Opening Balance'?'—':(o.orderNum?'#'+o.orderNum:i+1))+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9">'+orderRowLabel(o)+'</td>'
         + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+(o.patient||'—')+'</td>'
         + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+dt+'</td>'
         + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:center">'+(o.units||1)+'</td>'
