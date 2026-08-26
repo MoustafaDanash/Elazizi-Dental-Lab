@@ -2187,22 +2187,18 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
           <th style="padding:7px 10px;text-align:left;font-size:.65rem;color:var(--gray)">Date</th>
           <th style="padding:7px 10px;text-align:center;font-size:.65rem;color:var(--gray)">Units</th>
           <th style="padding:7px 10px;text-align:right;font-size:.65rem;color:var(--gray)">Price</th>
-          <th style="padding:7px 10px;text-align:right;font-size:.65rem;color:var(--green)">Paid</th>
-          <th style="padding:7px 10px;text-align:right;font-size:.65rem;color:#FF4C6A">Due</th>
         </tr></thead>
         <tbody id="bill-rows"></tbody>
         <tfoot><tr style="background:var(--off);font-weight:700">
-          <td colspan="4" style="padding:8px 10px;font-size:.72rem">Total Outstanding</td>
-          <td style="padding:8px 10px;text-align:right;font-size:.72rem" id="bill-subtotal">0 EGP</td>
-          <td style="padding:8px 10px;text-align:right;font-size:.72rem;color:var(--green)" id="bill-totalpaid">0 EGP</td>
-          <td style="padding:8px 10px;text-align:right;font-size:.75rem;color:#FF4C6A" id="bill-totaldue">0 EGP</td>
+          <td colspan="4" style="padding:8px 10px;font-size:.72rem">Total Invoiced</td>
+          <td style="padding:8px 10px;text-align:right;font-size:.75rem" id="bill-subtotal">0 EGP</td>
         </tr>
         <tr id="bill-credit-row" style="display:none;background:var(--off)">
-          <td colspan="6" style="padding:6px 10px;font-size:.7rem;font-weight:700;color:var(--green);text-align:right">Prepaid Credit</td>
+          <td colspan="4" style="padding:6px 10px;font-size:.7rem;font-weight:700;color:var(--green);text-align:right">Prepaid Credit</td>
           <td style="padding:6px 10px;text-align:right;font-size:.72rem;font-weight:700;color:var(--green)" id="bill-credit">0 EGP</td>
         </tr>
         <tr id="bill-netdue-row" style="display:none;background:var(--off);font-weight:800">
-          <td colspan="6" style="padding:8px 10px;font-size:.72rem;text-align:right">Net Outstanding (after credit)</td>
+          <td colspan="4" style="padding:8px 10px;font-size:.72rem;text-align:right">Net Outstanding (after credit)</td>
           <td style="padding:8px 10px;text-align:right;font-size:.78rem;color:#FF4C6A" id="bill-netdue">0 EGP</td>
         </tr></tfoot>
       </table>
@@ -2219,25 +2215,6 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
         <tfoot><tr style="background:var(--off);font-weight:700">
           <td colspan="2" style="padding:6px 10px;font-size:.68rem">Total Payments</td>
           <td style="padding:6px 10px;text-align:right;font-size:.68rem;color:var(--green)" id="bill-payments-total">0 EGP</td>
-        </tr></tfoot>
-      </table>
-    </div>
-    <div id="bill-prev-month" style="display:none;margin-bottom:10px">
-      <div style="font-size:.65rem;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Previous Month: <span id="bill-prev-month-label"></span></div>
-      <table style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:var(--off)">
-          <th style="padding:5px 10px;text-align:left;font-size:.62rem;color:var(--gray)">Service</th>
-          <th style="padding:5px 10px;text-align:left;font-size:.62rem;color:var(--gray)">Patient</th>
-          <th style="padding:5px 10px;text-align:right;font-size:.62rem;color:var(--gray)">Price</th>
-          <th style="padding:5px 10px;text-align:right;font-size:.62rem;color:var(--green)">Paid</th>
-          <th style="padding:5px 10px;text-align:right;font-size:.62rem;color:#FF4C6A">Due</th>
-        </tr></thead>
-        <tbody id="bill-prev-rows"></tbody>
-        <tfoot><tr style="background:var(--off);font-weight:700">
-          <td colspan="2" style="padding:6px 10px;font-size:.68rem">Previous Month Total</td>
-          <td style="padding:6px 10px;text-align:right;font-size:.68rem" id="bill-prev-total">0 EGP</td>
-          <td style="padding:6px 10px;text-align:right;font-size:.68rem;color:var(--green)" id="bill-prev-paid">0 EGP</td>
-          <td style="padding:6px 10px;text-align:right;font-size:.68rem;color:#FF4C6A" id="bill-prev-due">0 EGP</td>
         </tr></tfoot>
       </table>
     </div>
@@ -4361,10 +4338,17 @@ function addDoctorPrepaid(name,amt){
   d.prepaid=Math.max(0,Number(d.prepaid||0)+Number(amt||0));
   return d.prepaid;
 }
+// Doctors settle against their whole statement, not order-by-order — so
+// "paid" is the sum of what he's actually handed over (his payment
+// records), not the sum of each order's individually-allocated `paid`
+// field. Allocation drives which orders show as Paid/Partial/Unpaid in the
+// itemized table, but it must never be the thing the money totals are
+// derived from — that's what let a payment get recorded while the order it
+// was meant to cover silently kept paid:0.
 function doctorFin(name){
   var orders=state.orders.filter(function(o){ return o.doctor===name; });
   var inv=orders.reduce(function(s,o){ return s+Number(o.price||0); },0);
-  var pd=orders.reduce(function(s,o){ return s+Number(o.paid||0); },0);
+  var pd=(state.payments||[]).filter(function(p){ return p.doctor===name; }).reduce(function(s,p){ return s+Number(p.amount||0); },0);
   var prepaid=doctorPrepaid(name);
   return { invoiced:inv, paid:pd+prepaid, due:inv-pd-prepaid, prepaid:prepaid };
 }
@@ -5604,24 +5588,14 @@ function openBill(doctorName){
   currentBillDoctor = d;
 
   const now = new Date();
-  const thisMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
 
-  // Last closed month = previous calendar month
-  const prevDate  = new Date(now.getFullYear(), now.getMonth()-1, 1);
-  const prevMonth = prevDate.getFullYear()+'-'+String(prevDate.getMonth()+1).padStart(2,'0');
-  const prevMonthLabel = prevDate.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
-
-  // All orders for this doctor
-  const allOrders = state.orders.filter(o=>o.doctor===doctorName);
-
-  // Current outstanding (unpaid)
-  const outstandingOrders = allOrders.filter(o=>o.payment!=='Paid');
-
-  // Previous month closed orders (paid in last month)
-  const prevMonthOrders = allOrders.filter(o=>{
-    const orderMonth = (o.due||o.createdAt||'').slice(0,7);
-    return orderMonth === prevMonth;
-  });
+  // All orders for this doctor, newest first — the statement lists every
+  // order that was made rather than trying to settle/match them individually;
+  // Paid/Due is a doctor-level number only (see BALANCE SUMMARY below), not
+  // something computed per order.
+  const allOrders = state.orders.filter(o=>o.doctor===doctorName)
+    .slice()
+    .sort((a,b)=> new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0));
 
   // All-time balance (prepaid credit counts as paid)
   const binFin      = doctorFin(doctorName);
@@ -5671,13 +5645,12 @@ function openBill(doctorName){
       </div>`:''}`;
   }
 
-  // ── CURRENT OUTSTANDING ORDERS ──
+  // ── ORDERS ── one row per order, no per-order Paid/Due settling.
   const tbody = document.getElementById('bill-rows');
-  if(!outstandingOrders.length){
-    tbody.innerHTML = '<tr><td colspan="6" style="padding:12px;text-align:center;color:var(--gray);font-size:.75rem">No outstanding orders.</td></tr>';
+  if(!allOrders.length){
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--gray);font-size:.75rem">No orders yet.</td></tr>';
   } else {
-    tbody.innerHTML = outstandingOrders.map((o,i)=>{
-      const due = Number(o.price||0) - Number(o.paid||0);
+    tbody.innerHTML = allOrders.map((o,i)=>{
       const bg  = i%2===0?'':'background:rgba(0,0,0,.02)';
       const createdDate = o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : (o.due||'—');
       return `<tr style="${bg}">
@@ -5686,30 +5659,24 @@ function openBill(doctorName){
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:.68rem;color:var(--gray)">${createdDate}</td>
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;font-size:.73rem">${o.units||1}</td>
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.73rem">${fmt(o.price)} EGP</td>
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.73rem;color:var(--green)">${fmt(o.paid||0)} EGP</td>
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.73rem;font-weight:700;color:#FF4C6A">${fmt(due)} EGP</td>
       </tr>`;
     }).join('');
   }
 
-  // Totals for outstanding
-  const subtotal  = outstandingOrders.reduce((s,o)=>s+Number(o.price||0),0);
-  const totalPaid = outstandingOrders.reduce((s,o)=>s+Number(o.paid||0),0);
-  const totalDue  = subtotal - totalPaid;
-  document.getElementById('bill-subtotal').textContent  = fmt(subtotal)+' EGP';
-  document.getElementById('bill-totalpaid').textContent = fmt(totalPaid)+' EGP';
-  document.getElementById('bill-totaldue').textContent  = fmt(totalDue)+' EGP';
+  // Total invoiced (sum of the orders table above)
+  const subtotal = allOrders.reduce((s,o)=>s+Number(o.price||0),0);
+  document.getElementById('bill-subtotal').textContent = fmt(subtotal)+' EGP';
 
-  // Prepaid credit reduces what the doctor actually owes on these items
+  // Prepaid credit / net-outstanding — driven by the doctor-level totals
+  // above (allDue already nets the credit out), not a per-table subtotal.
   const billCredit = Number(binFin.prepaid||0);
   const creditRow  = document.getElementById('bill-credit-row');
   const netRow     = document.getElementById('bill-netdue-row');
   if(creditRow && netRow){
     if(billCredit>0){
-      const net = totalDue - billCredit;
       creditRow.style.display=''; netRow.style.display='';
       document.getElementById('bill-credit').textContent = '−'+fmt(billCredit)+' EGP';
-      document.getElementById('bill-netdue').textContent = fmt(Math.max(0,net))+' EGP'+(net<0?' ('+fmt(-net)+' EGP credit remains)':'');
+      document.getElementById('bill-netdue').textContent = fmt(Math.max(0,allDue))+' EGP'+(allDue<0?' ('+fmt(-allDue)+' EGP credit remains)':'');
     } else {
       creditRow.style.display='none'; netRow.style.display='none';
     }
@@ -5738,57 +5705,30 @@ function openBill(doctorName){
     }
   }
 
-  // ── PREVIOUS MONTH ORDERS SECTION ──
-  const prevEl = document.getElementById('bill-prev-month');
-  if(prevEl){
-    if(!prevMonthOrders.length){
-      prevEl.style.display = 'none';
-    } else {
-      prevEl.style.display = '';
-      const prevTotal  = prevMonthOrders.reduce((s,o)=>s+Number(o.price||0),0);
-      const prevPaid   = prevMonthOrders.reduce((s,o)=>s+Number(o.paid||0),0);
-      const prevDue    = prevTotal - prevPaid;
-      document.getElementById('bill-prev-month-label').textContent = prevMonthLabel;
-      const prevTbody = document.getElementById('bill-prev-rows');
-      prevTbody.innerHTML = prevMonthOrders.map((o,i)=>{
-        const due = Number(o.price||0)-Number(o.paid||0);
-        const bg  = i%2===0?'':'background:rgba(0,0,0,.02)';
-        return `<tr style="${bg}">
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:.7rem">${o.orderNum?'#'+o.orderNum:''} ${o.service}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:.7rem;color:var(--gray)">${o.patient||'—'}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.7rem">${fmt(o.price)} EGP</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.7rem;color:var(--green)">${fmt(o.paid||0)} EGP</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.7rem;font-weight:700;color:${due>0?'#FF4C6A':'var(--green)'}">${fmt(due)} EGP</td>
-        </tr>`;
-      }).join('');
-      document.getElementById('bill-prev-total').textContent  = fmt(prevTotal)+' EGP';
-      document.getElementById('bill-prev-paid').textContent   = fmt(prevPaid)+' EGP';
-      document.getElementById('bill-prev-due').textContent    = fmt(prevDue)+' EGP';
-    }
-  }
-
   openModal('bill-modal');
 }
 
 function buildBillText(){
   const d = currentBillDoctor;
   const now = new Date();
-  const prevDate  = new Date(now.getFullYear(), now.getMonth()-1, 1);
-  const prevMonth = prevDate.getFullYear()+'-'+String(prevDate.getMonth()+1).padStart(2,'0');
-  const prevMonthLabel = prevDate.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
 
-  const allOrders   = state.orders.filter(o=>o.doctor===d.name);
+  // Newest first for full-statement mode — the "full statement" lists every
+  // order that was made rather than settling/matching them individually;
+  // monthly mode (below) is untouched, it already lists cases within the
+  // period with per-case Paid/Due.
+  const allOrders   = state.orders.filter(o=>o.doctor===d.name)
+    .slice()
+    .sort((a,b)=> new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0));
   const txtModeEl   = document.getElementById('bill-period-mode');
   const txtMode     = txtModeEl ? txtModeEl.value : 'fin0';
   const isMonthly   = txtMode!=='full';
   const range       = isMonthly ? finMonthRange(txtMode==='fin-1'?-1:0) : null;
   const orders      = isMonthly
     ? allOrders.filter(o=>{ const ds=orderDateISO(o); return ds>=range.startStr && ds<range.endStr; })
-    : allOrders.filter(o=>o.payment!=='Paid');
+    : allOrders;
   const prevBalance = isMonthly
     ? allOrders.filter(o=>orderDateISO(o)<range.startStr).reduce((s,o)=>s+Number(o.price||0)-Number(o.paid||0),0)
     : 0;
-  const prevOrders  = allOrders.filter(o=>(o.due||o.createdAt||'').slice(0,7)===prevMonth);
 
   const txtFin      = doctorFin(d.name);
   const allInvoiced = txtFin.invoiced;
@@ -5839,25 +5779,33 @@ function buildBillText(){
 
 `;
 
-  // Current outstanding orders
+  // Orders
   if(orders.length){
     text += isMonthly ? `📋 *${range.label} Cases*
-` : `📋 *Current Outstanding Orders*
+` : `📋 *Orders*
 `;
     orders.forEach((o,i)=>{
-      const due = Number(o.price||0)-Number(o.paid||0);
       text += `${i+1}. ${o.service}${o.patient?' ('+o.patient+')':''}
 `;
-      text += `   💰 ${fmt(o.price)} EGP${o.paid>0?' | Paid: '+fmt(o.paid)+' EGP':''} | *Due: ${fmt(due)} EGP*
+      if(isMonthly){
+        const due = Number(o.price||0)-Number(o.paid||0);
+        text += `   💰 ${fmt(o.price)} EGP${o.paid>0?' | Paid: '+fmt(o.paid)+' EGP':''} | *Due: ${fmt(due)} EGP*
 `;
+      } else {
+        const units = o.units||1;
+        text += `   ${units} unit${units>1?'s':''} | 💰 ${fmt(o.price)} EGP
+`;
+      }
     });
-    text += `
+    if(isMonthly){
+      text += `
 *Total Due: ${fmt(totalDue)} EGP*
 `;
-    if(txtCredit>0){
-      text += `Prepaid Credit: −${fmt(txtCredit)} EGP
+      if(txtCredit>0){
+        text += `Prepaid Credit: −${fmt(txtCredit)} EGP
 *Net Due: ${fmt(Math.max(0,totalDue-txtCredit))} EGP*
 `;
+      }
     }
   }
 
@@ -5873,19 +5821,6 @@ function buildBillText(){
       const div  = paymentDivision(p);
       const dstr = p.date ? new Date(p.date+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '';
       text += `${i+1}. ${dstr} — ${fmt(p.amount)} EGP${div?' ('+div+')':''}
-`;
-    });
-  }
-
-  // Previous month orders (full-statement mode only — monthly reports carry
-  // the previous months as one balance line instead)
-  if(!isMonthly && prevOrders.length){
-    text += `
-📅 *Previous Cycle (${prevMonthLabel})*
-`;
-    prevOrders.forEach((o,i)=>{
-      const due = Number(o.price||0)-Number(o.paid||0);
-      text += `${i+1}. ${o.service}${o.patient?' ('+o.patient+')':''} — ${fmt(o.price)} EGP${due>0?' | Remaining: '+fmt(due)+' EGP':' ✅'}
 `;
     });
   }
@@ -6546,8 +6481,9 @@ function printBillDirect(){
   var baseFt = isA5 ? '9pt' : '11pt';
 
   // Read data from state (same source as openBill; prepaid credit counts as paid)
-  var allOrders       = state.orders.filter(function(o){ return o.doctor===d.name; });
-  var outstandingOrds = allOrders.filter(function(o){ return o.payment!=='Paid'; });
+  var allOrders = state.orders.filter(function(o){ return o.doctor===d.name; })
+    .slice()
+    .sort(function(a,b){ return new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0); });
   var pbFin           = doctorFin(d.name);
   var allInvoiced     = pbFin.invoiced;
   var allPaid         = pbFin.paid;
@@ -6562,7 +6498,7 @@ function printBillDirect(){
   var range     = isMonthly ? finMonthRange(mode==='fin-1'?-1:0) : null;
   var listOrders = isMonthly
     ? allOrders.filter(function(o){ var ds=orderDateISO(o); return ds>=range.startStr && ds<range.endStr; })
-    : outstandingOrds;
+    : allOrders;
   var prevBalance = isMonthly
     ? allOrders.filter(function(o){ return orderDateISO(o)<range.startStr; })
         .reduce(function(s,o){ return s+Number(o.price||0)-Number(o.paid||0); },0)
@@ -6579,22 +6515,36 @@ function printBillDirect(){
   }
   listOrders.forEach(function(o,i){
     var price = Number(o.price||0);
-    var paid  = Number(o.paid||0);
-    var due   = price - paid;
-    subTotal += price; subPaid += paid;
+    subTotal += price;
     var bg  = i%2===0 ? '#fff' : '#F8FAFC';
     var dt  = o.createdAt
       ? new Date(o.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})
       : (o.due||'—');
-    rows += '<tr style="background:'+bg+'">'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;font-weight:700">'+(o.orderNum?'#'+o.orderNum:i+1)+'</td>'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9">'+o.service+'</td>'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+(o.patient||'—')+'</td>'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+dt+'</td>'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right">'+fmt(price)+'</td>'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right;color:#00C896">'+fmt(paid)+'</td>'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right;color:#FF4C6A;font-weight:700">'+fmt(due)+'</td>'
-      + '</tr>';
+    if(isMonthly){
+      var paid = Number(o.paid||0);
+      var due  = price - paid;
+      subPaid += paid;
+      rows += '<tr style="background:'+bg+'">'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;font-weight:700">'+(o.orderNum?'#'+o.orderNum:i+1)+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9">'+o.service+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+(o.patient||'—')+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+dt+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right">'+fmt(price)+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right;color:#00C896">'+fmt(paid)+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right;color:#FF4C6A;font-weight:700">'+fmt(due)+'</td>'
+        + '</tr>';
+    } else {
+      // Full statement: every order, one row each — no per-order Paid/Due
+      // settling, just what was made and how many units.
+      rows += '<tr style="background:'+bg+'">'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;font-weight:700">'+(o.orderNum?'#'+o.orderNum:i+1)+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9">'+o.service+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+(o.patient||'—')+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+dt+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:center">'+(o.units||1)+'</td>'
+        + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right">'+fmt(price)+'</td>'
+        + '</tr>';
+    }
   });
   var subDue = subTotal - subPaid;
   var grandDue = isMonthly ? prevBalance + subDue - Number(pbFin.prepaid||0) : allDue;
@@ -6670,35 +6620,51 @@ function printBillDirect(){
         + '<div class="scard"><div class="slabel">Outstanding</div><div class="sval" style="color:#FF4C6A">'+fmt(allDue)+' EGP</div></div>')
     + '</div>'
     + ((listOrders.length || (isMonthly && prevBalance!==0))
-      ? '<table><thead><tr><th>#</th><th>Service</th><th>Patient</th><th>Date</th>'
-        + '<th style="text-align:right">Price</th><th style="text-align:right">Paid</th>'
-        + '<th style="text-align:right">Due</th></tr></thead><tbody>'
-        + rows
-        + '<tr class="total-row">'
-        + '<td colspan="4" style="padding:6px 8px">'+(isMonthly?range.label.toUpperCase()+' TOTAL':'TOTAL DUE')+'</td>'
-        + '<td style="padding:6px 8px;text-align:right">'+fmt(subTotal)+' EGP</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:#00C896">'+fmt(subPaid)+' EGP</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(subDue)+' EGP</td>'
-        + '</tr>'
-        + (Number(pbFin.prepaid||0)>0
-          ? '<tr class="total-row">'
-            + '<td colspan="6" style="padding:6px 8px;text-align:right">PREPAID CREDIT</td>'
-            + '<td style="padding:6px 8px;text-align:right;color:#00C896">−'+fmt(pbFin.prepaid)+' EGP</td>'
-            + '</tr>'
-          : '')
-        + (isMonthly
-          ? '<tr class="total-row">'
-            + '<td colspan="6" style="padding:6px 8px;text-align:right">TOTAL BALANCE DUE — الإجمالي المستحق</td>'
-            + '<td style="padding:6px 8px;text-align:right;color:'+(grandDue>0?'#FF4C6A':'#00C896')+'">'+fmt(grandDue)+' EGP</td>'
-            + '</tr>'
-          : (Number(pbFin.prepaid||0)>0
+      ? (isMonthly
+        ? '<table><thead><tr><th>#</th><th>Service</th><th>Patient</th><th>Date</th>'
+          + '<th style="text-align:right">Price</th><th style="text-align:right">Paid</th>'
+          + '<th style="text-align:right">Due</th></tr></thead><tbody>'
+          + rows
+          + '<tr class="total-row">'
+          + '<td colspan="4" style="padding:6px 8px">'+range.label.toUpperCase()+' TOTAL</td>'
+          + '<td style="padding:6px 8px;text-align:right">'+fmt(subTotal)+' EGP</td>'
+          + '<td style="padding:6px 8px;text-align:right;color:#00C896">'+fmt(subPaid)+' EGP</td>'
+          + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(subDue)+' EGP</td>'
+          + '</tr>'
+          + (Number(pbFin.prepaid||0)>0
             ? '<tr class="total-row">'
-              + '<td colspan="6" style="padding:6px 8px;text-align:right">NET DUE</td>'
-              + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(Math.max(0,subDue-Number(pbFin.prepaid||0)))+' EGP</td>'
+              + '<td colspan="6" style="padding:6px 8px;text-align:right">PREPAID CREDIT</td>'
+              + '<td style="padding:6px 8px;text-align:right;color:#00C896">−'+fmt(pbFin.prepaid)+' EGP</td>'
               + '</tr>'
-            : ''))
-        + '</tbody></table>'
-      : '<p style="text-align:center;color:#64748B;padding:20px">'+(isMonthly?'No cases in this period.':'No outstanding orders.')+'</p>')
+            : '')
+          + '<tr class="total-row">'
+          + '<td colspan="6" style="padding:6px 8px;text-align:right">TOTAL BALANCE DUE — الإجمالي المستحق</td>'
+          + '<td style="padding:6px 8px;text-align:right;color:'+(grandDue>0?'#FF4C6A':'#00C896')+'">'+fmt(grandDue)+' EGP</td>'
+          + '</tr>'
+          + '</tbody></table>'
+        // Full statement: every order, one row each — no per-order Paid/Due
+        // settling, just a single Total Invoiced line (Paid/Outstanding are
+        // doctor-level numbers, shown in the summary cards above).
+        : '<table><thead><tr><th>#</th><th>Service</th><th>Patient</th><th>Date</th>'
+          + '<th style="text-align:center">Units</th>'
+          + '<th style="text-align:right">Price</th></tr></thead><tbody>'
+          + rows
+          + '<tr class="total-row">'
+          + '<td colspan="5" style="padding:6px 8px">TOTAL INVOICED</td>'
+          + '<td style="padding:6px 8px;text-align:right">'+fmt(subTotal)+' EGP</td>'
+          + '</tr>'
+          + (Number(pbFin.prepaid||0)>0
+            ? '<tr class="total-row">'
+              + '<td colspan="5" style="padding:6px 8px;text-align:right">PREPAID CREDIT</td>'
+              + '<td style="padding:6px 8px;text-align:right;color:#00C896">−'+fmt(pbFin.prepaid)+' EGP</td>'
+              + '</tr>'
+              + '<tr class="total-row">'
+              + '<td colspan="5" style="padding:6px 8px;text-align:right">NET DUE</td>'
+              + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(Math.max(0,allDue))+' EGP</td>'
+              + '</tr>'
+            : '')
+          + '</tbody></table>')
+      : '<p style="text-align:center;color:#64748B;padding:20px">'+(isMonthly?'No cases in this period.':'No orders yet.')+'</p>')
     + paysHTML
     + '<div class="foot">Al-Azizi Dental Lab &nbsp;|&nbsp; Damanhour, Egypt &nbsp;|&nbsp; +20 120 360 5552</div></body></html>';
 
