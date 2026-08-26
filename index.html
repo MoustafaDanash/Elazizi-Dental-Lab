@@ -2192,34 +2192,11 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
           <th style="padding:7px 10px;text-align:left;font-size:.65rem;color:var(--gray)">Date</th>
           <th style="padding:7px 10px;text-align:center;font-size:.65rem;color:var(--gray)">Units</th>
           <th style="padding:7px 10px;text-align:right;font-size:.65rem;color:var(--gray)">Price</th>
-          <th style="padding:7px 10px;text-align:right;font-size:.65rem;color:var(--green)">Paid</th>
-          <th style="padding:7px 10px;text-align:right;font-size:.65rem;color:#FF4C6A">Due</th>
         </tr></thead>
         <tbody id="bill-rows"></tbody>
         <tfoot><tr style="background:var(--off);font-weight:700">
-          <td colspan="4" style="padding:8px 10px;font-size:.72rem">Total Outstanding</td>
-          <td style="padding:8px 10px;text-align:right;font-size:.72rem" id="bill-subtotal">0 EGP</td>
-          <td style="padding:8px 10px;text-align:right;font-size:.72rem;color:var(--green)" id="bill-totalpaid">0 EGP</td>
-          <td style="padding:8px 10px;text-align:right;font-size:.75rem;color:#FF4C6A" id="bill-totaldue">0 EGP</td>
-        </tr></tfoot>
-      </table>
-    </div>
-    <div id="bill-prev-month" style="display:none;margin-bottom:10px">
-      <div style="font-size:.65rem;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Previous Month: <span id="bill-prev-month-label"></span></div>
-      <table style="width:100%;border-collapse:collapse">
-        <thead><tr style="background:var(--off)">
-          <th style="padding:5px 10px;text-align:left;font-size:.62rem;color:var(--gray)">Service</th>
-          <th style="padding:5px 10px;text-align:left;font-size:.62rem;color:var(--gray)">Patient</th>
-          <th style="padding:5px 10px;text-align:right;font-size:.62rem;color:var(--gray)">Price</th>
-          <th style="padding:5px 10px;text-align:right;font-size:.62rem;color:var(--green)">Paid</th>
-          <th style="padding:5px 10px;text-align:right;font-size:.62rem;color:#FF4C6A">Due</th>
-        </tr></thead>
-        <tbody id="bill-prev-rows"></tbody>
-        <tfoot><tr style="background:var(--off);font-weight:700">
-          <td colspan="2" style="padding:6px 10px;font-size:.68rem">Previous Month Total</td>
-          <td style="padding:6px 10px;text-align:right;font-size:.68rem" id="bill-prev-total">0 EGP</td>
-          <td style="padding:6px 10px;text-align:right;font-size:.68rem;color:var(--green)" id="bill-prev-paid">0 EGP</td>
-          <td style="padding:6px 10px;text-align:right;font-size:.68rem;color:#FF4C6A" id="bill-prev-due">0 EGP</td>
+          <td colspan="4" style="padding:8px 10px;font-size:.72rem">Total Invoiced</td>
+          <td style="padding:8px 10px;text-align:right;font-size:.75rem" id="bill-subtotal">0 EGP</td>
         </tr></tfoot>
       </table>
     </div>
@@ -3659,11 +3636,13 @@ function deleteExpense(id){
       : (p.doctor===entry.incomeDoctor && Number(p.amount||0)===Number(entry.amount||0)));
     if(pIdx>=0){
       reversePaymentRecord(state.payments[pIdx]);
+      tombstone('payments', state.payments[pIdx].id);
       state.payments.splice(pIdx,1);
     }
   }
   const entries = all.filter(e=>e.id!==id);
   saveExpenses(entries);
+  tombstone('expenses', id);
   save();
   renderExpenses();
   if(isDocPay){ renderFinance(); renderDashboard(); renderOrders(); }
@@ -3840,7 +3819,8 @@ let state = {
   pricelist:[],
     scanSchedule:[],
     services:['Veneers','PFM Crown','Full Zirconia','Multi-Layer Zirconia','Cutback Zirconia','Zircomax','Nightguard','Vacuum Retainer','Flexible Denture','Hollywood Smile','Implant Crown','Dental Photography','Intra-Oral Scanning'],
-  nextOrderId:1
+  nextOrderId:1,
+  _tombstones:{}
 };
 let editingOrderId = null;
 let payingDoctorName = null;
@@ -3856,6 +3836,27 @@ function load(){
     const d = localStorage.getItem('alazizi_lab');
     if(d) state = JSON.parse(d);
   }catch(e){}
+}
+
+// Mark a record as deleted so a concurrent sync merge (see mergeById /
+// syncToSupabase) doesn't resurrect it just because another device's
+// snapshot still has it.
+function tombstone(collection, id){
+  if(id==null) return;
+  if(!state._tombstones) state._tombstones={};
+  if(!state._tombstones[collection]) state._tombstones[collection]=[];
+  if(state._tombstones[collection].indexOf(id)===-1) state._tombstones[collection].push(id);
+}
+
+// Union two arrays of {id,...} records: local wins over cloud when both
+// have the record (this device is the one about to push, so its copy is
+// the freshest one it knows about), ids in tombstoneSet are dropped from
+// both sides. Used to merge with the cloud instead of overwriting it.
+function mergeById(localArr, cloudArr, tombstoneSet){
+  var map = {};
+  (cloudArr||[]).forEach(function(item){ if(item && item.id!=null && (!tombstoneSet || !tombstoneSet.has(item.id))) map[item.id]=item; });
+  (localArr||[]).forEach(function(item){ if(item && item.id!=null && (!tombstoneSet || !tombstoneSet.has(item.id))) map[item.id]=item; });
+  return Object.keys(map).map(function(k){ return map[k]; });
 }
 
 // ── NAVIGATION ────────────────────────────────────────────────────────────
@@ -3925,12 +3926,19 @@ function addDoctorPrepaid(name,amt){
   d.prepaid=Math.max(0,Number(d.prepaid||0)+Number(amt||0));
   return d.prepaid;
 }
+// Doctors settle against their whole statement, not order-by-order — so
+// "paid" is the sum of what he's actually handed over (his payment
+// records), not the sum of each order's individually-allocated `paid`
+// field. Allocation drives which orders show as Paid/Partial/Unpaid in the
+// itemized table, but it must never be the thing the money totals are
+// derived from — that's what let a payment get recorded while the order it
+// was meant to cover silently kept paid:0.
 function doctorFin(name){
   var orders=state.orders.filter(function(o){ return o.doctor===name; });
   var inv=orders.reduce(function(s,o){ return s+Number(o.price||0); },0);
-  var pd=orders.reduce(function(s,o){ return s+Number(o.paid||0); },0);
+  var pd=(state.payments||[]).filter(function(p){ return p.doctor===name; }).reduce(function(s,p){ return s+Number(p.amount||0); },0);
   var prepaid=doctorPrepaid(name);
-  return { invoiced:inv, paid:pd+prepaid, due:inv-pd-prepaid, prepaid:prepaid };
+  return { invoiced:inv, paid:pd, due:inv-pd, prepaid:prepaid };
 }
 function totalPrepaid(){
   return (state.doctors||[]).reduce(function(s,d){ return s+Number(d.prepaid||0); },0);
@@ -4452,6 +4460,7 @@ function deleteOrder(id){
   if(!can('deleteOrder')){ alert('You do not have permission to delete orders.'); return; }
   if(!confirm('Delete this order?')) return;
   state.orders=state.orders.filter(x=>x.id!==id);
+  tombstone('orders', id);
   save(); renderOrders(); renderDashboard();
 }
 
@@ -4665,6 +4674,7 @@ function deleteDoctor(id){
   if(!can('deleteDoctor')){ alert('Only Owner or Manager can delete doctors.'); return; }
   if(!confirm('Delete this doctor? This will NOT delete their orders.')) return;
   state.doctors=state.doctors.filter(x=>x.id!==id);
+  tombstone('doctors', id);
   save(); renderDoctors();
 }
 
@@ -4807,9 +4817,11 @@ function deletePaymentRecord(pid){
   if(!confirm('Delete this payment of '+fmt(p.amount)+' EGP for '+p.doctor+'?\nThe amount will be added back to the doctor\'s outstanding balance.')) return;
   reversePaymentRecord(p);
   state.payments.splice(idx,1);
+  tombstone('payments', pid);
   // If this payment was created from an Expenses income entry, remove that entry too
   var entries=loadExpenses();
   var kept=entries.filter(function(e){ return e.paymentId!==pid; });
+  entries.forEach(function(e){ if(e.paymentId===pid) tombstone('expenses', e.id); });
   if(kept.length!==entries.length){ saveExpenses(kept); }
   save();
   renderFinance(); renderDashboard(); renderOrders();
@@ -5011,24 +5023,14 @@ function openBill(doctorName){
   currentBillDoctor = d;
 
   const now = new Date();
-  const thisMonth = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
 
-  // Last closed month = previous calendar month
-  const prevDate  = new Date(now.getFullYear(), now.getMonth()-1, 1);
-  const prevMonth = prevDate.getFullYear()+'-'+String(prevDate.getMonth()+1).padStart(2,'0');
-  const prevMonthLabel = prevDate.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
-
-  // All orders for this doctor
-  const allOrders = state.orders.filter(o=>o.doctor===doctorName);
-
-  // Current outstanding (unpaid)
-  const outstandingOrders = allOrders.filter(o=>o.payment!=='Paid');
-
-  // Previous month closed orders (paid in last month)
-  const prevMonthOrders = allOrders.filter(o=>{
-    const orderMonth = (o.due||o.createdAt||'').slice(0,7);
-    return orderMonth === prevMonth;
-  });
+  // All orders for this doctor, newest first — the statement lists every
+  // order that was made rather than trying to settle/match them individually;
+  // Paid/Due is a doctor-level number only (see BALANCE SUMMARY below), not
+  // something computed per order.
+  const allOrders = state.orders.filter(o=>o.doctor===doctorName)
+    .slice()
+    .sort((a,b)=> new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0));
 
   // All-time balance (prepaid credit counts as paid)
   const binFin      = doctorFin(doctorName);
@@ -5077,13 +5079,12 @@ function openBill(doctorName){
       </div>`:''}`;
   }
 
-  // ── CURRENT OUTSTANDING ORDERS ──
+  // ── ORDERS ── one row per order, no per-order Paid/Due settling.
   const tbody = document.getElementById('bill-rows');
-  if(!outstandingOrders.length){
-    tbody.innerHTML = '<tr><td colspan="6" style="padding:12px;text-align:center;color:var(--gray);font-size:.75rem">No outstanding orders.</td></tr>';
+  if(!allOrders.length){
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:12px;text-align:center;color:var(--gray);font-size:.75rem">No orders yet.</td></tr>';
   } else {
-    tbody.innerHTML = outstandingOrders.map((o,i)=>{
-      const due = Number(o.price||0) - Number(o.paid||0);
+    tbody.innerHTML = allOrders.map((o,i)=>{
       const bg  = i%2===0?'':'background:rgba(0,0,0,.02)';
       const createdDate = o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : (o.due||'—');
       return `<tr style="${bg}">
@@ -5092,48 +5093,13 @@ function openBill(doctorName){
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-size:.68rem;color:var(--gray)">${createdDate}</td>
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;font-size:.73rem">${o.units||1}</td>
         <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.73rem">${fmt(o.price)} EGP</td>
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.73rem;color:var(--green)">${fmt(o.paid||0)} EGP</td>
-        <td style="padding:7px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.73rem;font-weight:700;color:#FF4C6A">${fmt(due)} EGP</td>
       </tr>`;
     }).join('');
   }
 
-  // Totals for outstanding
-  const subtotal  = outstandingOrders.reduce((s,o)=>s+Number(o.price||0),0);
-  const totalPaid = outstandingOrders.reduce((s,o)=>s+Number(o.paid||0),0);
-  const totalDue  = subtotal - totalPaid;
-  document.getElementById('bill-subtotal').textContent  = fmt(subtotal)+' EGP';
-  document.getElementById('bill-totalpaid').textContent = fmt(totalPaid)+' EGP';
-  document.getElementById('bill-totaldue').textContent  = fmt(totalDue)+' EGP';
-
-  // ── PREVIOUS MONTH ORDERS SECTION ──
-  const prevEl = document.getElementById('bill-prev-month');
-  if(prevEl){
-    if(!prevMonthOrders.length){
-      prevEl.style.display = 'none';
-    } else {
-      prevEl.style.display = '';
-      const prevTotal  = prevMonthOrders.reduce((s,o)=>s+Number(o.price||0),0);
-      const prevPaid   = prevMonthOrders.reduce((s,o)=>s+Number(o.paid||0),0);
-      const prevDue    = prevTotal - prevPaid;
-      document.getElementById('bill-prev-month-label').textContent = prevMonthLabel;
-      const prevTbody = document.getElementById('bill-prev-rows');
-      prevTbody.innerHTML = prevMonthOrders.map((o,i)=>{
-        const due = Number(o.price||0)-Number(o.paid||0);
-        const bg  = i%2===0?'':'background:rgba(0,0,0,.02)';
-        return `<tr style="${bg}">
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:.7rem">${o.orderNum?'#'+o.orderNum:''} ${o.service}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);font-size:.7rem;color:var(--gray)">${o.patient||'—'}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.7rem">${fmt(o.price)} EGP</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.7rem;color:var(--green)">${fmt(o.paid||0)} EGP</td>
-          <td style="padding:6px 10px;border-bottom:1px solid var(--border);text-align:right;font-size:.7rem;font-weight:700;color:${due>0?'#FF4C6A':'var(--green)'}">${fmt(due)} EGP</td>
-        </tr>`;
-      }).join('');
-      document.getElementById('bill-prev-total').textContent  = fmt(prevTotal)+' EGP';
-      document.getElementById('bill-prev-paid').textContent   = fmt(prevPaid)+' EGP';
-      document.getElementById('bill-prev-due').textContent    = fmt(prevDue)+' EGP';
-    }
-  }
+  // Total invoiced (sum of the orders table above)
+  const subtotal = allOrders.reduce((s,o)=>s+Number(o.price||0),0);
+  document.getElementById('bill-subtotal').textContent = fmt(subtotal)+' EGP';
 
   openModal('bill-modal');
 }
@@ -5141,21 +5107,17 @@ function openBill(doctorName){
 function buildBillText(){
   const d = currentBillDoctor;
   const now = new Date();
-  const prevDate  = new Date(now.getFullYear(), now.getMonth()-1, 1);
-  const prevMonth = prevDate.getFullYear()+'-'+String(prevDate.getMonth()+1).padStart(2,'0');
-  const prevMonthLabel = prevDate.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
 
-  const allOrders   = state.orders.filter(o=>o.doctor===d.name);
-  const orders      = allOrders.filter(o=>o.payment!=='Paid');
-  const prevOrders  = allOrders.filter(o=>(o.due||o.createdAt||'').slice(0,7)===prevMonth);
+  const allOrders = state.orders.filter(o=>o.doctor===d.name)
+    .slice()
+    .sort((a,b)=> new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0));
 
-  const allInvoiced = allOrders.reduce((s,o)=>s+Number(o.price||0),0);
-  const allPaid     = allOrders.reduce((s,o)=>s+Number(o.paid||0),0);
-  const allDue      = allInvoiced - allPaid;
-
-  const subtotal  = orders.reduce((s,o)=>s+Number(o.price||0),0);
-  const totalPaid = orders.reduce((s,o)=>s+Number(o.paid||0),0);
-  const totalDue  = subtotal - totalPaid;
+  // Same source as the on-screen bill and the printed bill: paid is the sum
+  // of the doctor's actual payment records, not each order's own paid field.
+  const btFin       = doctorFin(d.name);
+  const allInvoiced = btFin.invoiced;
+  const allPaid     = btFin.paid;
+  const allDue      = btFin.due;
   const dateStr   = now.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
 
   let text = `🦷 *Al-Azizi Dental Lab*
@@ -5184,30 +5146,15 @@ function buildBillText(){
 
 `;
 
-  // Current outstanding orders
-  if(orders.length){
-    text += `📋 *Current Outstanding Orders*
+  // Orders — every order, one by one, no per-order Paid/Due settling
+  if(allOrders.length){
+    text += `📋 *Orders*
 `;
-    orders.forEach((o,i)=>{
-      const due = Number(o.price||0)-Number(o.paid||0);
+    allOrders.forEach((o,i)=>{
+      const units = o.units||1;
       text += `${i+1}. ${o.service}${o.patient?' ('+o.patient+')':''}
 `;
-      text += `   💰 ${fmt(o.price)} EGP${o.paid>0?' | Paid: '+fmt(o.paid)+' EGP':''} | *Due: ${fmt(due)} EGP*
-`;
-    });
-    text += `
-*Total Due: ${fmt(totalDue)} EGP*
-`;
-  }
-
-  // Previous month orders
-  if(prevOrders.length){
-    text += `
-📅 *Previous Cycle (${prevMonthLabel})*
-`;
-    prevOrders.forEach((o,i)=>{
-      const due = Number(o.price||0)-Number(o.paid||0);
-      text += `${i+1}. ${o.service}${o.patient?' ('+o.patient+')':''} — ${fmt(o.price)} EGP${due>0?' | Remaining: '+fmt(due)+' EGP':' ✅'}
+      text += `   ${units} unit${units>1?'s':''} | 💰 ${fmt(o.price)} EGP
 `;
     });
   }
@@ -5538,6 +5485,7 @@ function deleteUser(id){
   if(id===currentUser?.id){ alert("You cannot delete your own account."); return; }
   if(!confirm('Delete this user?')) return;
   state.users=state.users.filter(x=>x.id!==id);
+  tombstone('users', id);
   save(); renderUsers();
 }
 
@@ -5868,8 +5816,9 @@ function printBillDirect(){
   var baseFt = isA5 ? '9pt' : '11pt';
 
   // Read data from state (same source as openBill; prepaid credit counts as paid)
-  var allOrders       = state.orders.filter(function(o){ return o.doctor===d.name; });
-  var outstandingOrds = allOrders.filter(function(o){ return o.payment!=='Paid'; });
+  var allOrders = state.orders.filter(function(o){ return o.doctor===d.name; })
+    .slice()
+    .sort(function(a,b){ return new Date(b.createdAt||b.due||0) - new Date(a.createdAt||a.due||0); });
   var pbFin           = doctorFin(d.name);
   var allInvoiced     = pbFin.invoiced;
   var allPaid         = pbFin.paid;
@@ -5877,12 +5826,10 @@ function printBillDirect(){
   var now             = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
 
   var rows = '';
-  var subTotal=0, subPaid=0;
-  outstandingOrds.forEach(function(o,i){
+  var subTotal=0;
+  allOrders.forEach(function(o,i){
     var price = Number(o.price||0);
-    var paid  = Number(o.paid||0);
-    var due   = price - paid;
-    subTotal += price; subPaid += paid;
+    subTotal += price;
     var bg  = i%2===0 ? '#fff' : '#F8FAFC';
     var dt  = o.createdAt
       ? new Date(o.createdAt).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})
@@ -5892,12 +5839,10 @@ function printBillDirect(){
       + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9">'+o.service+'</td>'
       + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+(o.patient||'—')+'</td>'
       + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;color:#64748B">'+dt+'</td>'
+      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:center">'+(o.units||1)+'</td>'
       + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right">'+fmt(price)+'</td>'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right;color:#00C896">'+fmt(paid)+'</td>'
-      + '<td style="padding:5px 8px;border-bottom:1px solid #F1F5F9;text-align:right;color:#FF4C6A;font-weight:700">'+fmt(due)+'</td>'
       + '</tr>';
   });
-  var subDue = subTotal - subPaid;
 
   var printHTML = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
     + '<title>Bill — '+d.name+'</title>'
@@ -5936,18 +5881,16 @@ function printBillDirect(){
     +   '<div class="scard"><div class="slabel">Total Paid</div><div class="sval" style="color:#00C896">'+fmt(allPaid)+' EGP</div></div>'
     +   '<div class="scard"><div class="slabel">Outstanding</div><div class="sval" style="color:#FF4C6A">'+fmt(allDue)+' EGP</div></div>'
     + '</div>'
-    + (outstandingOrds.length
+    + (allOrders.length
       ? '<table><thead><tr><th>#</th><th>Service</th><th>Patient</th><th>Date</th>'
-        + '<th style="text-align:right">Price</th><th style="text-align:right">Paid</th>'
-        + '<th style="text-align:right">Due</th></tr></thead><tbody>'
+        + '<th style="text-align:center">Units</th>'
+        + '<th style="text-align:right">Price</th></tr></thead><tbody>'
         + rows
         + '<tr class="total-row">'
-        + '<td colspan="4" style="padding:6px 8px">TOTAL DUE</td>'
+        + '<td colspan="5" style="padding:6px 8px">TOTAL INVOICED</td>'
         + '<td style="padding:6px 8px;text-align:right">'+fmt(subTotal)+' EGP</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:#00C896">'+fmt(subPaid)+' EGP</td>'
-        + '<td style="padding:6px 8px;text-align:right;color:#FF4C6A">'+fmt(subDue)+' EGP</td>'
         + '</tr></tbody></table>'
-      : '<p style="text-align:center;color:#64748B;padding:20px">No outstanding orders.</p>')
+      : '<p style="text-align:center;color:#64748B;padding:20px">No orders yet.</p>')
     + '<div class="foot">Al-Azizi Dental Lab &nbsp;|&nbsp; Damanhour, Egypt &nbsp;|&nbsp; +20 120 360 5552</div></body></html>';
 
   var win = window.open('','_blank','width=800,height=1100');
@@ -6424,30 +6367,66 @@ function setDoctorDivision(val){
 
 
 // ── SUPABASE SYNC ────────────────────────────────────────────────────────────
+// Merge-before-push: two devices saving around the same time used to just
+// overwrite each other's entire dataset (last save wins), which is how
+// orders and payments were silently vanishing and doctor balances (derived
+// live from orders/payments) went wrong along with them. Now every push
+// first pulls the current cloud snapshot and unions each collection by id
+// — records only the other device has are kept, records only this device
+// has are added, and anything explicitly deleted (see tombstone()) is
+// dropped from both sides instead of resurrected. The one case this doesn't
+// fully solve is two devices editing the exact same record within the same
+// short window — for a shop with at most two concurrent users that's rare,
+// and it only affects that one record, never unrelated data.
 async function syncToSupabase(){
   if(!SB_ONLINE) return;
-  // Guard: never overwrite the cloud with a drastically smaller dataset —
-  // protects against a device that booted empty/stale pushing over real data
-  try{
-    var chkRes = await fetch(SB_URL+'/rest/v1/app_state?select=data&id=eq.alazizi-main',{headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}});
-    if(chkRes.ok){
-      var chkRows = await chkRes.json();
-      if(chkRows.length && chkRows[0].data){
-        var cloudNow = JSON.parse(chkRows[0].data);
-        var co=(cloudNow.orders||[]).length, cd=(cloudNow.doctors||[]).length;
-        var lo=(state.orders||[]).length,  ld=(state.doctors||[]).length;
-        var cs=(cloudNow.scanSchedule||[]).length, ls=(state.scanSchedule||[]).length;
-        if(lo < co*0.5 || ld < cd*0.5 || (cs>=4 && ls < cs*0.5)){
-          console.error('SYNC BLOCKED — local orders '+lo+'/'+co+', doctors '+ld+'/'+cd+', scans '+ls+'/'+cs);
-          try{ localStorage.removeItem('alazizi_sync_pending'); }catch(e2){}
-          if(typeof showToast==='function') showToast('⚠️ Sync blocked: this device has incomplete data. Refresh to reload from cloud.','error');
-          return;
-        }
-      }
-    }
-  } catch(e){ /* guard is best-effort — if the check itself fails, the upsert below fails too when offline */ }
   try{
     localStorage.setItem('alazizi_sync_pending','1');
+    var cloudNow = null;
+    try{
+      var chkRes = await fetch(SB_URL+'/rest/v1/app_state?select=data&id=eq.alazizi-main',{headers:{'apikey':SB_KEY,'Authorization':'Bearer '+SB_KEY}});
+      if(chkRes.ok){
+        var chkRows = await chkRes.json();
+        if(chkRows.length && chkRows[0].data) cloudNow = JSON.parse(chkRows[0].data);
+      }
+    } catch(e){ /* offline/unreachable — fall through and push local as-is */ }
+
+    if(cloudNow){
+      var lt = state._tombstones || {};
+      var ct = cloudNow._tombstones || {};
+      var collections = ['orders','doctors','payments','users','pricelist','scanSchedule'];
+      var tomb = {};
+      collections.forEach(function(k){ tomb[k] = new Set((lt[k]||[]).concat(ct[k]||[])); });
+
+      state.orders  = mergeById(state.orders,  cloudNow.orders,  tomb.orders)
+        .sort(function(a,b){ return Number(a.orderNum||0)-Number(b.orderNum||0); });
+      state.doctors      = mergeById(state.doctors,      cloudNow.doctors,      tomb.doctors);
+      state.payments      = mergeById(state.payments,     cloudNow.payments,     tomb.payments);
+      state.users         = mergeById(state.users,        cloudNow.users,        tomb.users);
+      state.pricelist      = mergeById(state.pricelist,    cloudNow.pricelist,    tomb.pricelist);
+      state.scanSchedule  = mergeById(state.scanSchedule, cloudNow.scanSchedule, tomb.scanSchedule);
+      state.nextOrderId = Math.max(Number(state.nextOrderId||1), Number(cloudNow.nextOrderId||1));
+
+      state._tombstones = {};
+      collections.forEach(function(k){ state._tombstones[k] = Array.from(tomb[k]); });
+
+      var expTomb = new Set((lt.expenses||[]).concat(ct.expenses||[]));
+      saveExpenses(mergeById(loadExpenses(), cloudNow.expenses, expTomb));
+      state._tombstones.expenses = Array.from(expTomb);
+
+      saveAdvancesStore(mergeById(loadAdvances(), cloudNow.advances, null));
+      saveDeductionsStore(mergeById(loadDeductions(), cloudNow.deductions, null));
+      saveSalaryHistory(mergeById(loadSalaryHistory(), cloudNow.salaryHistory, null));
+
+      try{ localStorage.setItem('alazizi_lab', JSON.stringify(state)); }catch(e){}
+      // A merge can pull in records this tab never had — refresh visible views
+      try{
+        if(typeof renderOrders==='function')    renderOrders();
+        if(typeof renderDashboard==='function') renderDashboard();
+        if(typeof renderDoctors==='function')   renderDoctors();
+      } catch(e){}
+    }
+
     var blob = {
       id: 'alazizi-main',
       data: JSON.stringify({
@@ -6462,13 +6441,14 @@ async function syncToSupabase(){
         expenses:      loadExpenses(),
         advances:      loadAdvances(),
         deductions:    loadDeductions(),
-        salaryHistory: loadSalaryHistory()
+        salaryHistory: loadSalaryHistory(),
+        _tombstones:   state._tombstones||{}
       }),
       updated_at: new Date().toISOString()
     };
     await sbUpsert('app_state', blob, 'id');
     localStorage.removeItem('alazizi_sync_pending');
-    console.log('Synced to Supabase');
+    console.log('Synced to Supabase (merged)');
   } catch(e){ console.error('Sync error:', e.message); }
 }
 
@@ -6488,6 +6468,7 @@ async function loadFromSupabase(){
       if(saved.scanSchedule)  state.scanSchedule = saved.scanSchedule;
       if(saved.pricelist)     state.pricelist    = saved.pricelist;
       if(saved.nextOrderId)   state.nextOrderId  = saved.nextOrderId;
+      state._tombstones = saved._tombstones || {};
       if(saved.expenses)      localStorage.setItem('alazizi_expenses',   JSON.stringify(saved.expenses));
       if(saved.advances)      localStorage.setItem('alazizi_advances',   JSON.stringify(saved.advances));
       if(saved.deductions)    localStorage.setItem('alazizi_deductions', JSON.stringify(saved.deductions));
@@ -6983,7 +6964,7 @@ function sendBulkWhatsAppReminders(){
   function sendNext(){
     if(i >= docs.length) return;
     var d    = docs[i++];
-    var ords = state.orders.filter(function(o){ return o.doctor===d.name && o.payment!=='Paid'; });
+    var ords = state.orders.filter(function(o){ return o.doctor===d.name && (Number(o.price||0)-Number(o.paid||0))!==0; });
     var due  = doctorFin(d.name).due;
     var parts = ['Dr. ' + d.name, 'Al-Azizi Dental Lab',
                  'Outstanding: ' + fmt(due) + ' EGP (' + ords.length + ' orders)',
@@ -7153,6 +7134,7 @@ function savePriceItem(){
 function deletePriceItem(itemId){
   if(!confirm('Delete this price item?')) return;
   state.pricelist=getPricelist().filter(function(x){ return x.id!==itemId; });
+  tombstone('pricelist', itemId);
   save(); renderPricelist();
 }
 
@@ -7415,7 +7397,7 @@ function saveScanSession(){
   var dfEl=document.getElementById('scan-date-filter'); if(dfEl) dfEl.value='';
   renderScanPage();
 }
-function deleteScanSession(id){ if(!confirm('Delete?')) return; state.scanSchedule=getScanSchedule().filter(function(x){ return x.id!==id; }); save(); renderScanPage(); }
+function deleteScanSession(id){ if(!confirm('Delete?')) return; state.scanSchedule=getScanSchedule().filter(function(x){ return x.id!==id; }); tombstone('scanSchedule', id); save(); renderScanPage(); }
 function approveScan(id){
   var list=getScanSchedule(),idx=list.findIndex(function(x){ return x.id===id; }); if(idx<0) return;
   var s=list[idx];
