@@ -4266,6 +4266,50 @@ function printReportPDF(){
     expRowsHTML += trow(['Salaries', {v:fmt(rep.salaryExpenses)+' EGP',color:'#FF4C6A'}], {bg:'#F8FAFC'});
   }
 
+  // Itemized, dated lines — mirrors the on-screen "Itemized — Received & Paid"
+  // ledger. Received comes straight from payment records (pPays, already
+  // period+division filtered above); Paid combines dated expenses + salary
+  // payouts, with the same shared/50% convention used everywhere else.
+  var ITEM_CAP = 150;
+  function fmtPrintDate(d){
+    if(!d) return '—';
+    var dt = new Date(String(d).slice(0,10)+'T00:00:00');
+    return isNaN(dt) ? d : dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  }
+
+  var recItems = pPays.slice().sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); })
+    .map(function(p){ return { date:p.date, who:p.doctor||'—', note:p.note||'', amt:Number(p.amount||0) }; });
+
+  var payItems = [];
+  loadExpenses().forEach(function(e){
+    if(e.type!=='expense' || !dateInPeriod(e.date, type, value)) return;
+    var amt = Number(e.amount||0), shared = false;
+    if(isDiv){
+      if(e.expenseDivision===div){ /* full */ }
+      else if(!e.expenseDivision){ amt = amt*0.5; shared = true; }
+      else return;
+    }
+    payItems.push({ date:e.date, who:e.description||e.category||'Expense', note:(e.category||'')+(shared?' · shared 50%':''), amt:amt });
+  });
+  loadSalaryHistory().filter(function(h){ return salaryInPeriod(h, type, value); }).forEach(function(h){
+    var u = state.users.find(function(x){ return x.id===h.userId; });
+    var amt = Number(h.amount||0), shared = false;
+    if(isDiv){
+      if(u && u.division===div){ /* full */ }
+      else if(!u || !u.division){ amt = amt*0.5; shared = true; }
+      else return;
+    }
+    payItems.push({ date:h.month+'-01', who:(u?u.name:'Former employee')+' — salary', note:h.month+(shared?' · shared 50%':''), amt:amt });
+  });
+  payItems.sort(function(a,b){ return (a.date||'').localeCompare(b.date||''); });
+
+  var recItemsHTML = recItems.slice(0,ITEM_CAP).map(function(r,i){
+    return trow([fmtPrintDate(r.date), r.who, r.note||'—', {v:fmt(r.amt)+' EGP',color:'#00C896'}], {bg:i%2?'#F8FAFC':'#fff'});
+  }).join('');
+  var payItemsHTML = payItems.slice(0,ITEM_CAP).map(function(r,i){
+    return trow([fmtPrintDate(r.date), r.who, r.note||'—', {v:fmt(r.amt)+' EGP',color:'#FF4C6A'}], {bg:i%2?'#F8FAFC':'#fff'});
+  }).join('');
+
   function scard(lbl, val, color, sub){
     return '<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:8px 10px;text-align:center">'
       + '<div style="font-size:.62em;color:#64748B;text-transform:uppercase;letter-spacing:.06em">'+lbl+'</div>'
@@ -4343,11 +4387,21 @@ function printReportPDF(){
           + scard('Other / Untagged', fmt(payDiv.Other)+' EGP')
           + '</div>') : '')
 
+    // Received — itemized by date
+    + (recItems.length ? section('Received — Itemized by Date ('+recItems.length+')',
+      '<table>'+thead(['Date','Doctor','Note','Amount'])+'<tbody>'+recItemsHTML+'</tbody></table>'
+      + (recItems.length>ITEM_CAP ? '<div style="font-size:.65em;color:#94A3B8;margin-top:4px">Showing first '+ITEM_CAP+' of '+recItems.length+' — narrow the period for the full list.</div>' : '')) : '')
+
     // Expenses breakdown
     + (expRows.length || rep.salaryExpenses>0 ? section('Expenses by Category'+(isDiv?' — '+div+' share':''),
       '<table>'+thead(['Category','Amount'])+'<tbody>'+expRowsHTML
       + trow(['Total', {v:fmt(rep.totalExpenses)+' EGP',color:'#FF4C6A',bold:true}], {bg:'#F0F9FF',bold:true})
       + '</tbody></table>') : '')
+
+    // Paid — itemized by date (expenses + salary payouts)
+    + (payItems.length ? section('Paid — Itemized by Date ('+payItems.length+')',
+      '<table>'+thead(['Date','Description','Note','Amount'])+'<tbody>'+payItemsHTML+'</tbody></table>'
+      + (payItems.length>ITEM_CAP ? '<div style="font-size:.65em;color:#94A3B8;margin-top:4px">Showing first '+ITEM_CAP+' of '+payItems.length+' — narrow the period for the full list.</div>' : '')) : '')
 
     // As-of-today snapshot
     + section('Account Snapshot — as of '+genAt,
