@@ -3257,6 +3257,56 @@ function mergeDoctorsFromCloud(cloudDoctors, cloudDeleted){
     .filter(function(d){ return tombs.indexOf(d.id)<0; });
 }
 
+// ── SERVICES/PRICELIST/SCAN SCHEDULE MERGE — same protection, extended
+// 2026-08-30 to close the remaining gap flagged in the users/doctors fix.
+function loadServiceTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_services_deleted')||'[]'); }catch(e){ return []; } }
+function saveServiceTombstones(t){ localStorage.setItem('alazizi_services_deleted', JSON.stringify(t.slice(-500))); }
+// state.services is a flat list of plain strings (no id) — the string value
+// itself is the merge key, so this is a union of cloud+local minus tombstones.
+function mergeServicesFromCloud(cloudServices, cloudDeleted){
+  var tombs = loadServiceTombstones();
+  (cloudDeleted||[]).forEach(function(v){ if(v && tombs.indexOf(v)<0) tombs.push(v); });
+  saveServiceTombstones(tombs);
+  var set = {};
+  (cloudServices||[]).forEach(function(s){ if(s) set[s]=true; });
+  (state.services||[]).forEach(function(s){ if(s) set[s]=true; });
+  state.services = Object.keys(set).filter(function(s){ return tombs.indexOf(s)<0; });
+}
+
+function loadPriceItemTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_pricelist_deleted')||'[]'); }catch(e){ return []; } }
+function savePriceItemTombstones(t){ localStorage.setItem('alazizi_pricelist_deleted', JSON.stringify(t.slice(-500))); }
+function mergePricelistFromCloud(cloudList, cloudDeleted){
+  var tombs = loadPriceItemTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  savePriceItemTombstones(tombs);
+  var map = {};
+  (cloudList||[]).forEach(function(p){ if(p && p.id) map[p.id] = p; });
+  (state.pricelist||[]).forEach(function(p){
+    if(!p || !p.id) return;
+    var c = map[p.id];
+    if(!c || Number(p.mtime||0) > Number(c.mtime||0)) map[p.id] = p;
+  });
+  state.pricelist = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(p){ return tombs.indexOf(p.id)<0; });
+}
+
+function loadScanTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_scans_deleted')||'[]'); }catch(e){ return []; } }
+function saveScanTombstones(t){ localStorage.setItem('alazizi_scans_deleted', JSON.stringify(t.slice(-500))); }
+function mergeScanScheduleFromCloud(cloudList, cloudDeleted){
+  var tombs = loadScanTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  saveScanTombstones(tombs);
+  var map = {};
+  (cloudList||[]).forEach(function(s){ if(s && s.id) map[s.id] = s; });
+  (state.scanSchedule||[]).forEach(function(s){
+    if(!s || !s.id) return;
+    var c = map[s.id];
+    if(!c || Number(s.mtime||0) > Number(c.mtime||0)) map[s.id] = s;
+  });
+  state.scanSchedule = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(s){ return tombs.indexOf(s.id)<0; });
+}
+
 // ── SYNC FAILURE BANNER — a failed cloud save must be impossible to miss ──
 function showSyncError(){
   var b=document.getElementById('sync-error-banner');
@@ -4992,7 +5042,11 @@ function addService(){
   document.getElementById('new-service').value='';
   save(); renderSettings();
 }
-function removeService(i){ state.services.splice(i,1); save(); renderSettings(); }
+function removeService(i){
+  var v=state.services[i];
+  if(v){ var _t=loadServiceTombstones(); if(_t.indexOf(v)<0){ _t.push(v); saveServiceTombstones(_t); } }
+  state.services.splice(i,1); save(); renderSettings();
+}
 function clearData(){
   if(confirm('Clear ALL data? This cannot be undone.'))
     { state={orders:[],doctors:[],payments:[],services:[...state.services],nextOrderId:1,users:[...( state.users||[])],pricelist:state.pricelist,scanSchedule:[]}; save(); renderDashboard(); alert('Data cleared.'); }
@@ -7414,6 +7468,10 @@ async function syncToSupabase(){
         // Same protection for users & doctors — see mergeUsersFromCloud/mergeDoctorsFromCloud above
         mergeUsersFromCloud(cloudNow.users, cloudNow.usersDeleted);
         mergeDoctorsFromCloud(cloudNow.doctors, cloudNow.doctorsDeleted);
+        // Same protection for services/pricelist/scan schedule
+        mergeServicesFromCloud(cloudNow.services, cloudNow.servicesDeleted);
+        mergePricelistFromCloud(cloudNow.pricelist, cloudNow.pricelistDeleted);
+        mergeScanScheduleFromCloud(cloudNow.scanSchedule, cloudNow.scanScheduleDeleted);
         var co=(cloudNow.orders||[]).length, cd=(cloudNow.doctors||[]).length;
         var lo=(state.orders||[]).length,  ld=(state.doctors||[]).length;
         var cs=(cloudNow.scanSchedule||[]).length, ls=(state.scanSchedule||[]).length;
@@ -7451,6 +7509,9 @@ async function syncToSupabase(){
         paymentsDeleted: loadPaymentTombstones(),
         usersDeleted:    loadUserTombstones(),
         doctorsDeleted:  loadDoctorTombstones(),
+        servicesDeleted:    loadServiceTombstones(),
+        pricelistDeleted:   loadPriceItemTombstones(),
+        scanScheduleDeleted: loadScanTombstones(),
         advances:      loadAdvances(),
         deductions:    loadDeductions(),
         salaryHistory: loadSalaryHistory()
@@ -7475,9 +7536,9 @@ async function loadFromSupabase(){
       mergeUsersFromCloud(saved.users, saved.usersDeleted);
       mergeDoctorsFromCloud(saved.doctors, saved.doctorsDeleted);
       mergeOrdersFromCloud(saved.orders, saved.ordersDeleted, saved.payments, saved.paymentsDeleted, saved.nextOrderId);
-      if(saved.services && saved.services.length) state.services = saved.services;
-      if(saved.scanSchedule)  state.scanSchedule = saved.scanSchedule;
-      if(saved.pricelist)     state.pricelist    = saved.pricelist;
+      mergeServicesFromCloud(saved.services, saved.servicesDeleted);
+      mergePricelistFromCloud(saved.pricelist, saved.pricelistDeleted);
+      mergeScanScheduleFromCloud(saved.scanSchedule, saved.scanScheduleDeleted);
       mergeExpensesFromCloud(saved.expenses, saved.expensesDeleted);
       if(saved.advances)      localStorage.setItem('alazizi_advances',   JSON.stringify(saved.advances));
       if(saved.deductions)    localStorage.setItem('alazizi_deductions', JSON.stringify(saved.deductions));
@@ -8127,7 +8188,8 @@ function savePriceItem(){
     desc:     document.getElementById('pi-desc').value,
     days:     Number(document.getElementById('pi-days').value||3),
     active:   document.getElementById('pi-active').value==='1',
-    updatedAt:new Date().toISOString()
+    updatedAt:new Date().toISOString(),
+    mtime:    Date.now()
   };
   var list=getPricelist();
   if(editingPriceItemId){
@@ -8142,6 +8204,7 @@ function savePriceItem(){
 
 function deletePriceItem(itemId){
   if(!confirm('Delete this price item?')) return;
+  var _t=loadPriceItemTombstones(); if(_t.indexOf(itemId)<0){ _t.push(itemId); savePriceItemTombstones(_t); }
   state.pricelist=getPricelist().filter(function(x){ return x.id!==itemId; });
   save(); renderPricelist();
 }
@@ -8383,7 +8446,8 @@ function saveScanSession(){
     approved:_existingScan?(_existingScan.approved||false):false,
     approvedBy:_existingScan?(_existingScan.approvedBy||''):'',
     approvedAt:_existingScan?(_existingScan.approvedAt||''):'',
-    createdAt:_existingScan?(_existingScan.createdAt||new Date().toISOString()):new Date().toISOString() };
+    createdAt:_existingScan?(_existingScan.createdAt||new Date().toISOString()):new Date().toISOString(),
+    mtime:Date.now() };
   var list=getScanSchedule();
   if(editingScanId){ var idx=list.findIndex(function(x){ return x.id===editingScanId; }); if(idx>=0) list[idx]=session; else list.push(session); }
   else list.push(session);
@@ -8405,7 +8469,11 @@ function saveScanSession(){
   var dfEl=document.getElementById('scan-date-filter'); if(dfEl) dfEl.value='';
   renderScanPage();
 }
-function deleteScanSession(id){ if(!confirm('Delete?')) return; state.scanSchedule=getScanSchedule().filter(function(x){ return x.id!==id; }); save(); renderScanPage(); }
+function deleteScanSession(id){
+  if(!confirm('Delete?')) return;
+  var _t=loadScanTombstones(); if(_t.indexOf(id)<0){ _t.push(id); saveScanTombstones(_t); }
+  state.scanSchedule=getScanSchedule().filter(function(x){ return x.id!==id; }); save(); renderScanPage();
+}
 function approveScan(id){
   var list=getScanSchedule(),idx=list.findIndex(function(x){ return x.id===id; }); if(idx<0) return;
   var s=list[idx];
@@ -8413,7 +8481,7 @@ function approveScan(id){
   var isTech=currentUser&&s.tech&&currentUser.name===s.tech;
   var canApprove=isTech||(role==='owner'||role==='manager');
   if(!canApprove){ alert('Only the assigned technician ('+s.tech+') or a manager can approve this scan.'); return; }
-  list[idx].approved=true; list[idx].approvedBy=currentUser?currentUser.name:''; list[idx].approvedAt=new Date().toISOString();
+  list[idx].approved=true; list[idx].approvedBy=currentUser?currentUser.name:''; list[idx].approvedAt=new Date().toISOString(); list[idx].mtime=Date.now();
   // Bill the scan fee onto the doctor's balance as a real order so it shows
   // in Finance, bills, prints and can be settled by payments like any order.
   // (Fees without a doctor keep the old behavior: counted as instant revenue.)
@@ -8441,6 +8509,7 @@ function approveScan(id){
 function updateScanStatus(id,status){
   var list=getScanSchedule(); var idx=list.findIndex(function(x){ return x.id===id; }); if(idx<0) return;
   list[idx].status=status; if(status==='Completed') list[idx].completedAt=new Date().toISOString();
+  list[idx].mtime=Date.now();
   state.scanSchedule=list; save(); renderScanPage(); addNotif('done','Scan '+status,list[idx].doctor||'');
 }
 function shiftScanWeek(dir){ scanWeekOffset=dir===0?0:scanWeekOffset+dir; renderScanPage(); }
