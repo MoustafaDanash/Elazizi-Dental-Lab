@@ -3215,6 +3215,48 @@ function mergeOrdersFromCloud(cloudOrders, cloudDeleted, cloudPayments, cloudPay
   state.nextOrderId = Math.max(Number(state.nextOrderId||1), Number(cloudNextId||1));
 }
 
+// ── USER/DOCTOR MERGE — same protection as orders/payments/expenses above.
+// Before this, state.users and state.doctors were wholesale-replaced by
+// whatever loadFromSupabase() pulled, with no id-merge and no delete
+// tombstones. A newly added user/doctor that hadn't yet reached the cloud
+// (offline moment, blocked sync guard, or just a slow network) was silently
+// wiped by the very next load/refresh/periodic cloudRefresh() — no error, no
+// banner, it just vanished. Root-caused 2026-08-30 from an "adding users
+// disappears on refresh" report, the same underlying class of bug as the
+// Ayman Matar order-delete incident earlier that day.
+function loadUserTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_users_deleted')||'[]'); }catch(e){ return []; } }
+function saveUserTombstones(t){ localStorage.setItem('alazizi_users_deleted', JSON.stringify(t.slice(-500))); }
+function mergeUsersFromCloud(cloudUsers, cloudDeleted){
+  var tombs = loadUserTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  saveUserTombstones(tombs);
+  var map = {};
+  (cloudUsers||[]).forEach(function(u){ if(u && u.id) map[u.id] = u; });
+  (state.users||[]).forEach(function(u){
+    if(!u || !u.id) return;
+    var c = map[u.id];
+    if(!c || Number(u.mtime||0) > Number(c.mtime||0)) map[u.id] = u;
+  });
+  state.users = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(u){ return tombs.indexOf(u.id)<0; });
+}
+function loadDoctorTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_doctors_deleted')||'[]'); }catch(e){ return []; } }
+function saveDoctorTombstones(t){ localStorage.setItem('alazizi_doctors_deleted', JSON.stringify(t.slice(-500))); }
+function mergeDoctorsFromCloud(cloudDoctors, cloudDeleted){
+  var tombs = loadDoctorTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  saveDoctorTombstones(tombs);
+  var map = {};
+  (cloudDoctors||[]).forEach(function(d){ if(d && d.id) map[d.id] = d; });
+  (state.doctors||[]).forEach(function(d){
+    if(!d || !d.id) return;
+    var c = map[d.id];
+    if(!c || Number(d.mtime||0) > Number(c.mtime||0)) map[d.id] = d;
+  });
+  state.doctors = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(d){ return tombs.indexOf(d.id)<0; });
+}
+
 // ── SYNC FAILURE BANNER — a failed cloud save must be impossible to miss ──
 function showSyncError(){
   var b=document.getElementById('sync-error-banner');
@@ -5337,7 +5379,8 @@ function saveDoctor(){
       var amt=Number(document.getElementById('d-bonus-amount')?.value||0);
       if(!amt) return null;
       return { amount:amt, requiresModel: !!document.getElementById('d-bonus-requires-model')?.checked };
-    })()
+    })(),
+    mtime: Date.now()
   };
   if(editingDoctorId){
     const idx=state.doctors.findIndex(x=>x.id===editingDoctorId);
@@ -5401,6 +5444,7 @@ function saveDoctor(){
 function deleteDoctor(id){
   if(!can('deleteDoctor')){ alert('Only Owner or Manager can delete doctors.'); return; }
   if(!confirm('Delete this doctor? This will NOT delete their orders.')) return;
+  var _t=loadDoctorTombstones(); if(_t.indexOf(id)<0){ _t.push(id); saveDoctorTombstones(_t); }
   state.doctors=state.doctors.filter(x=>x.id!==id);
   save(); renderDoctors();
 }
@@ -6354,7 +6398,8 @@ function saveUser(){
   const data={
     id:editingUserId||uid(),
     name, username, password, role, salary, division,
-    customPerms: isCustom ? checkedPerms : null
+    customPerms: isCustom ? checkedPerms : null,
+    mtime: Date.now()
   };
   if(editingUserId){
     const idx=state.users.findIndex(x=>x.id===editingUserId);
@@ -6369,6 +6414,7 @@ function saveUser(){
 function deleteUser(id){
   if(id===currentUser?.id){ alert("You cannot delete your own account."); return; }
   if(!confirm('Delete this user?')) return;
+  var _t=loadUserTombstones(); if(_t.indexOf(id)<0){ _t.push(id); saveUserTombstones(_t); }
   state.users=state.users.filter(x=>x.id!==id);
   save(); renderUsers();
 }
@@ -7365,6 +7411,9 @@ async function syncToSupabase(){
         mergeExpensesFromCloud(cloudNow.expenses, cloudNow.expensesDeleted);
         // Merge orders & payments by id + tombstones so an offline/stale device can never wipe them
         mergeOrdersFromCloud(cloudNow.orders, cloudNow.ordersDeleted, cloudNow.payments, cloudNow.paymentsDeleted, cloudNow.nextOrderId);
+        // Same protection for users & doctors — see mergeUsersFromCloud/mergeDoctorsFromCloud above
+        mergeUsersFromCloud(cloudNow.users, cloudNow.usersDeleted);
+        mergeDoctorsFromCloud(cloudNow.doctors, cloudNow.doctorsDeleted);
         var co=(cloudNow.orders||[]).length, cd=(cloudNow.doctors||[]).length;
         var lo=(state.orders||[]).length,  ld=(state.doctors||[]).length;
         var cs=(cloudNow.scanSchedule||[]).length, ls=(state.scanSchedule||[]).length;
@@ -7400,6 +7449,8 @@ async function syncToSupabase(){
         expensesDeleted: loadExpenseTombstones(),
         ordersDeleted:   loadOrderTombstones(),
         paymentsDeleted: loadPaymentTombstones(),
+        usersDeleted:    loadUserTombstones(),
+        doctorsDeleted:  loadDoctorTombstones(),
         advances:      loadAdvances(),
         deductions:    loadDeductions(),
         salaryHistory: loadSalaryHistory()
@@ -7421,8 +7472,8 @@ async function loadFromSupabase(){
     var blobs = await _blobRes.json();
     if(blobs && blobs.length && blobs[0].data){
       var saved = JSON.parse(blobs[0].data);
-      if(saved.users    && saved.users.length)    state.users    = saved.users;
-      if(saved.doctors  && saved.doctors.length)  state.doctors  = saved.doctors;
+      mergeUsersFromCloud(saved.users, saved.usersDeleted);
+      mergeDoctorsFromCloud(saved.doctors, saved.doctorsDeleted);
       mergeOrdersFromCloud(saved.orders, saved.ordersDeleted, saved.payments, saved.paymentsDeleted, saved.nextOrderId);
       if(saved.services && saved.services.length) state.services = saved.services;
       if(saved.scanSchedule)  state.scanSchedule = saved.scanSchedule;
