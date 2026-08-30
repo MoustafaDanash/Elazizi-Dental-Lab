@@ -164,6 +164,8 @@ tr:hover td{background:rgba(0,180,216,.03)}
 /* ── MOBILE SIDEBAR & FOOTER FIX ─────────────────────────── */
 @media(max-width:768px){
 
+  .rep-ledger-grid{ grid-template-columns:1fr !important; }
+
   /* ── Sidebar: fixed left 60px icon strip ── */
   .sidebar{
     position:fixed;left:0;top:0;
@@ -1587,6 +1589,12 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
         <h3>📊 Revenue &amp; Expenses by Division</h3>
         <div id="rep-breakdown"></div>
       </div>
+
+      <div class="fin-card">
+        <h3>🧾 Itemized — Received &amp; Paid</h3>
+        <div style="font-size:.68rem;color:var(--gray);margin:-6px 0 12px">Every payment received and every expense paid, dated, for the selected division and period.</div>
+        <div id="rep-ledger"></div>
+      </div>
     </div>
 
   <!-- DELIVERY VIEW -->
@@ -2221,8 +2229,8 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:.7rem;flex-wrap:wrap">
       <span style="color:var(--gray);font-weight:600">Report period:</span>
       <select id="bill-period-mode" style="padding:5px 10px;border:1px solid var(--border);border-radius:8px;font-size:.72rem;background:var(--off);outline:none">
-        <option value="fin0">This month (5th → 4th) + previous balance</option>
-        <option value="fin-1">Last month (5th → 4th) + previous balance</option>
+        <option value="fin0">This month (6th → 5th) + previous balance</option>
+        <option value="fin-1">Last month (6th → 5th) + previous balance</option>
         <option value="full">Full statement — entire balance</option>
       </select>
     </div>
@@ -3848,7 +3856,7 @@ let currentReportDivision = 'Overall';
 function dateInPeriod(dateStr, type, value){
   if(type==='all') return true;
   if(!dateStr || !value) return false;
-  if(type==='month') return dateStr.slice(0,7)===value;
+  if(type==='month') return finMonthKeyOf(dateStr)===value;
   if(type==='year')  return dateStr.slice(0,4)===value;
   if(type==='quarter'){
     const parts = value.split('-Q');
@@ -3861,12 +3869,30 @@ function dateInPeriod(dateStr, type, value){
   return false;
 }
 
+// Salary history is bucketed by calendar month ('YYYY-MM', not a dated
+// transaction), so it's matched by that label directly rather than through
+// dateInPeriod's 6th→5th financial-month logic.
+function salaryInPeriod(h, type, value){
+  if(type==='all') return true;
+  if(!h.month || !value) return false;
+  if(type==='month') return h.month===value;
+  if(type==='year') return h.month.slice(0,4)===value;
+  if(type==='quarter'){
+    const parts = value.split('-Q');
+    const y = parts[0], q = Number(parts[1]);
+    const mo = Number(h.month.slice(5,7));
+    if(!mo) return false;
+    return h.month.slice(0,4)===y && Math.ceil(mo/3)===q;
+  }
+  return false;
+}
+
 function populateReportPeriods(){
   const type = document.getElementById('rep-period-type')?.value || 'month';
   const dates = [];
   state.orders.forEach(function(o){ if(o.service!=='Opening Balance' && o.createdAt) dates.push(o.createdAt.slice(0,10)); });
   loadExpenses().forEach(function(e){ if(e.date) dates.push(e.date); });
-  loadSalaryHistory().forEach(function(h){ if(h.month) dates.push(h.month+'-01'); });
+  loadSalaryHistory().forEach(function(h){ if(h.month) dates.push(h.month+'-10'); }); // mid-month day so it always keys to the financial month starting in this calendar month
   if(!dates.length) dates.push(today());
 
   const sel = document.getElementById('rep-period-value');
@@ -3874,10 +3900,10 @@ function populateReportPeriods(){
   let opts = [];
   if(type==='month'){
     const set = {};
-    dates.forEach(function(d){ set[d.slice(0,7)]=true; });
+    dates.forEach(function(d){ const k=finMonthKeyOf(d); if(k) set[k]=true; });
     opts = Object.keys(set).sort().reverse();
     sel.innerHTML = opts.map(function(m){
-      const label = new Date(m+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+      const label = new Date(m+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'})+' ('+finMonthRangeLabel(m)+')';
       return '<option value="'+m+'">'+label+'</option>';
     }).join('');
   } else if(type==='quarter'){
@@ -3918,7 +3944,22 @@ function computeReportNumbers(type, value, div){
   });
   const filteredOrders = div==='Overall' ? orders : orders.filter(function(o){ return o.division===div; });
   const invoiced = filteredOrders.reduce(function(s,o){ return s+Number(o.price||0); },0);
-  const paid     = filteredOrders.reduce(function(s,o){ return s+Number(o.paid||0); },0);
+
+  // Received = actual payment records dated in-period, never an order's own
+  // `paid` field — same rule as doctorFin(), for the same reason (see the
+  // Outstanding Balance bug). Payments with no resolvable division (shared
+  // reception) split 50/50 in division views, matching shared-expense rule.
+  const periodPayments = (state.payments||[]).filter(function(p){
+    return dateInPeriod((p.date||'').slice(0,10), type, value);
+  });
+  const paid = periodPayments.reduce(function(s,p){
+    const amt = Number(p.amount||0);
+    if(div==='Overall') return s+amt;
+    const pd = paymentDivision(p);
+    if(pd===div) return s+amt;
+    if(!pd) return s+amt*0.5;
+    return s;
+  },0);
 
   const expenses = loadExpenses().filter(function(e){
     return e.type==='expense' && dateInPeriod(e.date, type, value);
@@ -3933,9 +3974,12 @@ function computeReportNumbers(type, value, div){
     return s;
   },0);
 
+  // Salary records are bucketed by calendar month (paid once a month), not a
+  // dated transaction — matched against the period's calendar month label
+  // directly rather than through the 6th→5th financial-month logic above.
   let salaryExpenses = 0;
   loadSalaryHistory().forEach(function(h){
-    if(!dateInPeriod(h.month+'-01', type, value)) return;
+    if(!salaryInPeriod(h, type, value)) return;
     const u = state.users.find(function(x){ return x.id===h.userId; });
     const amt = Number(h.amount||0);
     if(div==='Overall') salaryExpenses += amt;
@@ -3944,7 +3988,7 @@ function computeReportNumbers(type, value, div){
   });
 
   // "Other Income" entries (not doctor payments — those already flow in via
-  // order.paid) count toward net profit; shared 50/50 in division views
+  // payment records above) count toward net profit; shared 50/50 in division views
   const otherIncome = loadExpenses().reduce(function(s,e){
     if(e.type!=='income' || (e.incomeSource||'').startsWith('Doctor Payment')) return s;
     if(!dateInPeriod(e.date, type, value)) return s;
@@ -3972,6 +4016,95 @@ function renderReports(){
   netEl.style.color = r.netProfit>=0 ? 'var(--green)' : '#FF4C6A';
 
   renderReportBreakdown(type, value);
+  renderReportLedger(type, value, currentReportDivision);
+}
+
+function renderReportLedger(type, value, div){
+  const el = document.getElementById('rep-ledger');
+  if(!el) return;
+
+  function fmtDate(d){
+    if(!d) return '—';
+    const dt = new Date(String(d).slice(0,10)+'T00:00:00');
+    return isNaN(dt) ? d : dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short'});
+  }
+
+  // Received rows — from actual payment records, never order.paid.
+  const periodPayments = (state.payments||[]).filter(function(p){
+    return dateInPeriod((p.date||'').slice(0,10), type, value);
+  });
+  var recRows = [];
+  periodPayments.forEach(function(p){
+    const pd = paymentDivision(p);
+    if(div==='Overall' || pd===div){
+      recRows.push({date:p.date, who:p.doctor, meta:p.note||'', amt:Number(p.amount||0), shared:false});
+    } else if(!pd){
+      recRows.push({date:p.date, who:p.doctor, meta:p.note||'', amt:Number(p.amount||0)*0.5, shared:true});
+    }
+  });
+
+  // Paid rows — dated expenses + salary payouts (salary matched by its own
+  // calendar-month bucket, see salaryInPeriod).
+  const periodExpenses = loadExpenses().filter(function(e){
+    return e.type==='expense' && dateInPeriod(e.date, type, value);
+  });
+  var payRows = [];
+  periodExpenses.forEach(function(e){
+    if(div==='Overall' || e.expenseDivision===div){
+      payRows.push({date:e.date, who:e.description||e.category||'Expense', meta:e.category||'', amt:Number(e.amount||0), shared:false});
+    } else if(!e.expenseDivision){
+      payRows.push({date:e.date, who:e.description||e.category||'Expense', meta:e.category||'', amt:Number(e.amount||0)*0.5, shared:true});
+    }
+  });
+  loadSalaryHistory().filter(function(h){ return salaryInPeriod(h, type, value); }).forEach(function(h){
+    const u = state.users.find(function(x){ return x.id===h.userId; });
+    const name = (u ? u.name : 'Former employee')+' — salary';
+    const d = h.month+'-01';
+    if(div==='Overall' || (u && u.division===div)){
+      payRows.push({date:d, who:name, meta:h.month, amt:Number(h.amount||0), shared:false});
+    } else if(!u || !u.division){
+      payRows.push({date:d, who:name, meta:h.month, amt:Number(h.amount||0)*0.5, shared:true});
+    }
+  });
+
+  recRows.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+  payRows.sort(function(a,b){ return (b.date||'').localeCompare(a.date||''); });
+  const recTotal = recRows.reduce(function(s,r){ return s+r.amt; },0);
+  const payTotal = payRows.reduce(function(s,r){ return s+r.amt; },0);
+  const CAP = 250;
+
+  function rowsHtml(rows, colorVar){
+    if(!rows.length) return '<div style="padding:14px;font-size:.75rem;color:var(--gray)">No records in this period.</div>';
+    var shown = rows.slice(0, CAP);
+    var html = shown.map(function(r){
+      return '<div style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--border)">'
+        +'<div style="width:44px;flex-shrink:0;font-size:.68rem;font-weight:700;color:var(--gray)">'+fmtDate(r.date)+'</div>'
+        +'<div style="flex:1;min-width:0"><div style="font-size:.8rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(r.who||'—')+'</div>'
+          +'<div style="font-size:.65rem;color:var(--gray)">'+(r.meta?r.meta+(r.shared?' · ':''):'')+(r.shared?'shared, 50% counted here':'')+'</div>'
+        +'</div>'
+        +'<div style="font-size:.82rem;font-weight:700;color:'+colorVar+';white-space:nowrap">'+fmt(r.amt)+'</div>'
+      +'</div>';
+    }).join('');
+    if(rows.length>CAP) html += '<div style="padding:10px 4px;font-size:.68rem;color:var(--gray)">+ '+(rows.length-CAP)+' more — narrow the period to see all.</div>';
+    return html;
+  }
+
+  el.innerHTML = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px" class="rep-ledger-grid">'
+    +'<div style="border:1px solid var(--border);border-radius:12px;overflow:hidden">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--off);border-bottom:1px solid var(--border)">'
+        +'<span style="font-size:.8rem;font-weight:700;color:var(--navy)">💰 Received</span>'
+        +'<span style="font-size:.85rem;font-weight:800;color:var(--green)">'+fmt(recTotal)+' EGP</span>'
+      +'</div>'
+      +'<div style="max-height:420px;overflow-y:auto">'+rowsHtml(recRows,'var(--green)')+'</div>'
+    +'</div>'
+    +'<div style="border:1px solid var(--border);border-radius:12px;overflow:hidden">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--off);border-bottom:1px solid var(--border)">'
+        +'<span style="font-size:.8rem;font-weight:700;color:var(--navy)">💸 Paid</span>'
+        +'<span style="font-size:.85rem;font-weight:800;color:var(--purple)">'+fmt(payTotal)+' EGP</span>'
+      +'</div>'
+      +'<div style="max-height:420px;overflow-y:auto">'+rowsHtml(payRows,'var(--purple)')+'</div>'
+    +'</div>'
+  +'</div>';
 }
 
 function renderReportBreakdown(type, value){
@@ -4005,7 +4138,7 @@ function renderReportBreakdown(type, value){
 // ── PDF FINANCIAL REPORT ────────────────────────────────────────────────────
 function reportPeriodLabel(type, value){
   if(type==='all') return 'All Time — Whole History';
-  if(type==='month') return new Date(value+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+  if(type==='month') return new Date(value+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'})+' ('+finMonthRangeLabel(value)+')';
   if(type==='quarter') return value.replace('-Q',' — Q');
   return value;
 }
@@ -4370,9 +4503,9 @@ function sortFullStatementOrders(orders){
     return new Date(a.createdAt||a.due||0) - new Date(b.createdAt||b.due||0);
   });
 }
-// ── FINANCIAL MONTH ── the lab's billing month runs from the 5th to the 4th
-// of the next month, so "July" = 5 Jul → 4 Aug.
-var FIN_MONTH_START_DAY = 5;
+// ── FINANCIAL MONTH ── the lab's billing month runs from the 6th to the 5th
+// of the next month, so "July" = 6 Jul → 5 Aug.
+var FIN_MONTH_START_DAY = 6;
 function localISODate(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function finMonthRange(offset){
   var now = new Date();
@@ -4386,6 +4519,23 @@ function finMonthRange(offset){
     label:    start.toLocaleDateString('en-GB',{month:'long',year:'numeric'}),
     rangeLabel: start.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' – '+last.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'})
   };
+}
+// Which financial month (6th → 5th) a given calendar date falls in, as a
+// 'YYYY-MM' key labeling the month the period STARTS in — e.g. Aug 5 and
+// Jul 6 both key to the same financial month, distinct from calendar July.
+function finMonthKeyOf(dateStr){
+  var d = new Date(String(dateStr).slice(0,10)+'T00:00:00');
+  if(isNaN(d)) return '';
+  var y = d.getFullYear(), m = d.getMonth();
+  if(d.getDate() < FIN_MONTH_START_DAY){ m -= 1; if(m<0){ m = 11; y -= 1; } }
+  return y+'-'+String(m+1).padStart(2,'0');
+}
+// Display range for a finMonthKeyOf() key, e.g. '2026-07' → 'Jul 6 – Aug 5, 2026'
+function finMonthRangeLabel(key){
+  var parts = key.split('-'), y = Number(parts[0]), m = Number(parts[1])-1;
+  var start = new Date(y, m, FIN_MONTH_START_DAY);
+  var last  = new Date(y, m+1, FIN_MONTH_START_DAY - 1);
+  return start.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' – '+last.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
 }
 function orderDateISO(o){ return String(o.due||o.createdAt||'').slice(0,10); }
 // Division that collected a payment: from its linked income entry, else from the note text
@@ -6503,7 +6653,7 @@ function printBillDirect(){
   var allDue          = pbFin.due;
   var now             = new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
 
-  // Report period: financial month (5th → 4th) with the previous balance
+  // Report period: financial month (6th → 5th) with the previous balance
   // carried as line one, or the full all-time statement
   var modeEl    = document.getElementById('bill-period-mode');
   var mode      = modeEl ? modeEl.value : 'fin0';
@@ -7166,8 +7316,14 @@ async function syncToSupabase(){
         var cs=(cloudNow.scanSchedule||[]).length, ls=(state.scanSchedule||[]).length;
         if(lo < co*0.5 || ld < cd*0.5 || (cs>=4 && ls < cs*0.5)){
           console.error('SYNC BLOCKED — local orders '+lo+'/'+co+', doctors '+ld+'/'+cd+', scans '+ls+'/'+cs);
-          try{ localStorage.removeItem('alazizi_sync_pending'); }catch(e2){}
-          if(typeof showToast==='function') showToast('⚠️ Sync blocked: this device has incomplete data. Refresh to reload from cloud.','error');
+          // Keep the pending flag set (don't drop the local edit) and raise the
+          // persistent banner — it auto-retries save() every 60s once this
+          // device's data looks complete again. Previously this cleared the
+          // pending flag and showed a toast that vanished in 3.5s, so a blocked
+          // edit (e.g. an order delete) was silently abandoned with no lasting
+          // sign anything was wrong — see the June-2026 Ayman Matar bill bug.
+          try{ localStorage.setItem('alazizi_sync_pending','1'); }catch(e2){}
+          showSyncError();
           return;
         }
       }
