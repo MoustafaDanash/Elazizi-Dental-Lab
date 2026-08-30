@@ -2485,7 +2485,7 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
 <div class="modal-bg" id="deduction-modal">
   <div class="modal" style="max-width:420px">
     <div class="modal-hdr">
-      <h3>Record Deduction</h3>
+      <h3 id="deduction-modal-title">Record Deduction</h3>
       <button class="modal-close" onclick="closeModal('deduction-modal')">&#x2715;</button>
     </div>
     <div class="form-grid">
@@ -2530,7 +2530,7 @@ body.rtl input, body.rtl select, body.rtl textarea { text-align: right; directio
     </div>
     <div class="form-actions">
       <button class="btn btn-ghost" onclick="closeModal('deduction-modal')">Cancel</button>
-      <button class="btn btn-primary" style="background:#FF4C6A" onclick="saveDeduction()">Record Deduction</button>
+      <button class="btn btn-primary" style="background:#FF4C6A" onclick="saveDeduction()" id="ded-confirm-btn">Record Deduction</button>
     </div>
   </div>
 </div>
@@ -2962,9 +2962,10 @@ function renderSalaries(){
         .filter(o=>o.referrer===u.name)
         .reduce((s,o)=>s+Number(o.commission||0),0);
 
-      const userAdvances = loadAdvances().filter(a=>a.userId===u.id&&!a.deducted);
-      const totalAdvance = userAdvances.reduce((s,a)=>s+Number(a.amount||0),0);
-      const netSalary    = Math.max(0, salary - totalAdvance);
+      const userAdvances   = loadAdvances().filter(a=>a.userId===u.id&&!a.deducted);
+      const totalAdvance   = userAdvances.reduce((s,a)=>s+Number(a.amount||0),0);
+      const totalDeduction = unsettledDeductionsTotal(u.id);
+      const netSalary      = Math.max(0, salary - totalAdvance - totalDeduction);
       return '<div class="salary-card">'
         +'<div class="salary-info">'
         +'<div class="salary-avatar">'+u.name.charAt(0).toUpperCase()+'</div>'
@@ -2974,13 +2975,15 @@ function renderSalaries(){
           +(['employee','laboratory','delivery'].indexOf(u.role)>=0 ? (u.division==='Porcelain'?' · <span style="color:var(--gold);font-weight:700">🦷 Porcelain</span>':u.division==='Zirconia'?' · <span style="color:var(--cyan);font-weight:700">⬜ Zirconia</span>':' · <span style="color:var(--gray)">🔁 Both</span>') : '')
           +(isPaid?' · <span style="color:var(--green);font-weight:600">✅ Paid</span>':salary>0?' · <span style="color:#FF4C6A;font-weight:600">⚠ Pending</span>':'')
           +(totalAdvance>0?' · <span style="color:var(--gold);font-weight:600">💸 Advance: '+fmt(totalAdvance)+' EGP</span>':'')
+          +(totalDeduction>0?' · <span style="color:#FF4C6A;font-weight:600">✂️ Deductions: '+fmt(totalDeduction)+' EGP</span>':'')
         +'</div>'
         +'</div>'
         +'</div>'
         +'<div class="salary-amounts">'
         +'<div class="salary-amt"><div class="salary-amt-val" style="color:var(--green)">'+fmt(salary)+' EGP</div><div class="salary-amt-lbl">Monthly</div></div>'
         +(totalAdvance>0?'<div class="salary-amt"><div class="salary-amt-val" style="color:var(--gold)">'+fmt(totalAdvance)+' EGP</div><div class="salary-amt-lbl">Advance</div></div>':'')
-        +(totalAdvance>0?'<div class="salary-amt"><div class="salary-amt-val" style="color:var(--navy)">'+fmt(netSalary)+' EGP</div><div class="salary-amt-lbl">Net Salary</div></div>':'')
+        +(totalDeduction>0?'<div class="salary-amt"><div class="salary-amt-val" style="color:#FF4C6A">'+fmt(totalDeduction)+' EGP</div><div class="salary-amt-lbl">Deductions</div></div>':'')
+        +((totalAdvance>0||totalDeduction>0)?'<div class="salary-amt"><div class="salary-amt-val" style="color:var(--navy)">'+fmt(netSalary)+' EGP</div><div class="salary-amt-lbl">Net Salary</div></div>':'')
         +(comm>0?'<div class="salary-amt"><div class="salary-amt-val" style="color:var(--purple)">'+fmt(comm)+' EGP</div><div class="salary-amt-lbl">Commission</div></div>':'')
         +'<div class="salary-amt"><div class="salary-amt-val" style="color:'+(remaining>0?'#FF4C6A':'var(--green)')+'">'+fmt(remaining)+' EGP</div><div class="salary-amt-lbl">Remaining</div></div>'
         +'</div>'
@@ -3052,7 +3055,11 @@ function updatePaySalaryAmount(){
   const userId = sel.value;
   const user = state.users.find(u=>u.id===userId);
   if(user){
-    document.getElementById('ps-amount').value = user.salary||0;
+    // Default to salary minus any still-outstanding advances/deductions, not
+    // the raw monthly figure — that was the "deductions aren't reflected" bug.
+    const outstandingAdv = loadAdvances().filter(a=>a.userId===userId&&!a.deducted).reduce((s,a)=>s+Number(a.amount||0),0);
+    const outstandingDed = unsettledDeductionsTotal(userId);
+    document.getElementById('ps-amount').value = Math.max(0, Number(user.salary||0) - outstandingAdv - outstandingDed);
     // Show commission info
     const month = document.getElementById('ps-month').value;
     const comm = state.orders
@@ -3085,7 +3092,7 @@ function confirmPaySalary(){
     const rec = history.find(h=>h.id===editingSalaryId);
     if(!rec){ alert('Salary record not found.'); editingSalaryId=null; return; }
     rec.userId = userId; rec.month = month; rec.amount = amount; rec.note = note;
-    rec.editedAt = today(); rec.editedBy = currentUser.name;
+    rec.editedAt = today(); rec.editedBy = currentUser.name; rec.mtime = Date.now();
     saveSalaryHistory(history);
     save();
     addNotif('paid', 'Salary Payment Edited — '+(emp?emp.name:''), fmt(amount)+' EGP for '+month);
@@ -3095,7 +3102,7 @@ function confirmPaySalary(){
     return;
   }
 
-  history.push({ id:uid(), userId, month, amount, note, date:today() });
+  history.push({ id:uid(), userId, month, amount, note, date:today(), mtime:Date.now() });
   saveSalaryHistory(history);
   save();
 
@@ -3124,6 +3131,7 @@ function deleteSalaryRecord(id){
   if(!rec) return;
   const emp = state.users.find(u=>u.id===rec.userId);
   if(!confirm('Delete salary payment of '+fmt(rec.amount)+' EGP for '+(emp?emp.name:'?')+' ('+rec.month+')?\nExpense reports for both divisions will update automatically.')) return;
+  var _t=loadSalaryHistTombstones(); if(_t.indexOf(id)<0){ _t.push(id); saveSalaryHistTombstones(_t); }
   saveSalaryHistory(history.filter(h=>h.id!==id));
   save();
   addNotif('paid', 'Salary Payment Deleted — '+(emp?emp.name:''), fmt(rec.amount)+' EGP for '+rec.month);
@@ -3305,6 +3313,66 @@ function mergeScanScheduleFromCloud(cloudList, cloudDeleted){
   });
   state.scanSchedule = Object.keys(map).map(function(k){ return map[k]; })
     .filter(function(s){ return tombs.indexOf(s.id)<0; });
+}
+
+// ── ADVANCES/DEDUCTIONS/SALARY HISTORY MERGE — same protection, added
+// 2026-08-30 alongside deduction edit/delete so the new mutations can't hit
+// the same silent-wipe bug the users/doctors fix closed earlier today.
+function loadAdvanceTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_advances_deleted')||'[]'); }catch(e){ return []; } }
+function saveAdvanceTombstones(t){ localStorage.setItem('alazizi_advances_deleted', JSON.stringify(t.slice(-500))); }
+function mergeAdvancesFromCloud(cloudList, cloudDeleted){
+  var tombs = loadAdvanceTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  saveAdvanceTombstones(tombs);
+  var map = {};
+  (cloudList||[]).forEach(function(a){ if(a && a.id) map[a.id] = a; });
+  (loadAdvances()||[]).forEach(function(a){
+    if(!a || !a.id) return;
+    var c = map[a.id];
+    if(!c || Number(a.mtime||0) > Number(c.mtime||0)) map[a.id] = a;
+  });
+  var merged = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(a){ return tombs.indexOf(a.id)<0; });
+  saveAdvancesStore(merged);
+  return merged;
+}
+
+function loadDeductionTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_deductions_deleted')||'[]'); }catch(e){ return []; } }
+function saveDeductionTombstones(t){ localStorage.setItem('alazizi_deductions_deleted', JSON.stringify(t.slice(-500))); }
+function mergeDeductionsFromCloud(cloudList, cloudDeleted){
+  var tombs = loadDeductionTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  saveDeductionTombstones(tombs);
+  var map = {};
+  (cloudList||[]).forEach(function(d){ if(d && d.id) map[d.id] = d; });
+  (loadDeductions()||[]).forEach(function(d){
+    if(!d || !d.id) return;
+    var c = map[d.id];
+    if(!c || Number(d.mtime||0) > Number(c.mtime||0)) map[d.id] = d;
+  });
+  var merged = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(d){ return tombs.indexOf(d.id)<0; });
+  saveDeductionsStore(merged);
+  return merged;
+}
+
+function loadSalaryHistTombstones(){ try{ return JSON.parse(localStorage.getItem('alazizi_salaries_deleted')||'[]'); }catch(e){ return []; } }
+function saveSalaryHistTombstones(t){ localStorage.setItem('alazizi_salaries_deleted', JSON.stringify(t.slice(-500))); }
+function mergeSalaryHistoryFromCloud(cloudList, cloudDeleted){
+  var tombs = loadSalaryHistTombstones();
+  (cloudDeleted||[]).forEach(function(id){ if(id && tombs.indexOf(id)<0) tombs.push(id); });
+  saveSalaryHistTombstones(tombs);
+  var map = {};
+  (cloudList||[]).forEach(function(h){ if(h && h.id) map[h.id] = h; });
+  (loadSalaryHistory()||[]).forEach(function(h){
+    if(!h || !h.id) return;
+    var c = map[h.id];
+    if(!c || Number(h.mtime||0) > Number(c.mtime||0)) map[h.id] = h;
+  });
+  var merged = Object.keys(map).map(function(k){ return map[k]; })
+    .filter(function(h){ return tombs.indexOf(h.id)<0; });
+  saveSalaryHistory(merged);
+  return merged;
 }
 
 // ── SYNC FAILURE BANNER — a failed cloud save must be impossible to miss ──
@@ -7472,6 +7540,10 @@ async function syncToSupabase(){
         mergeServicesFromCloud(cloudNow.services, cloudNow.servicesDeleted);
         mergePricelistFromCloud(cloudNow.pricelist, cloudNow.pricelistDeleted);
         mergeScanScheduleFromCloud(cloudNow.scanSchedule, cloudNow.scanScheduleDeleted);
+        // Same protection for advances/deductions/salary history
+        mergeAdvancesFromCloud(cloudNow.advances, cloudNow.advancesDeleted);
+        mergeDeductionsFromCloud(cloudNow.deductions, cloudNow.deductionsDeleted);
+        mergeSalaryHistoryFromCloud(cloudNow.salaryHistory, cloudNow.salaryHistoryDeleted);
         var co=(cloudNow.orders||[]).length, cd=(cloudNow.doctors||[]).length;
         var lo=(state.orders||[]).length,  ld=(state.doctors||[]).length;
         var cs=(cloudNow.scanSchedule||[]).length, ls=(state.scanSchedule||[]).length;
@@ -7514,7 +7586,10 @@ async function syncToSupabase(){
         scanScheduleDeleted: loadScanTombstones(),
         advances:      loadAdvances(),
         deductions:    loadDeductions(),
-        salaryHistory: loadSalaryHistory()
+        salaryHistory: loadSalaryHistory(),
+        advancesDeleted:     loadAdvanceTombstones(),
+        deductionsDeleted:   loadDeductionTombstones(),
+        salaryHistoryDeleted: loadSalaryHistTombstones()
       }),
       updated_at: new Date().toISOString()
     };
@@ -7540,9 +7615,9 @@ async function loadFromSupabase(){
       mergePricelistFromCloud(saved.pricelist, saved.pricelistDeleted);
       mergeScanScheduleFromCloud(saved.scanSchedule, saved.scanScheduleDeleted);
       mergeExpensesFromCloud(saved.expenses, saved.expensesDeleted);
-      if(saved.advances)      localStorage.setItem('alazizi_advances',   JSON.stringify(saved.advances));
-      if(saved.deductions)    localStorage.setItem('alazizi_deductions', JSON.stringify(saved.deductions));
-      if(saved.salaryHistory) localStorage.setItem('alazizi_salaries',   JSON.stringify(saved.salaryHistory));
+      mergeAdvancesFromCloud(saved.advances, saved.advancesDeleted);
+      mergeDeductionsFromCloud(saved.deductions, saved.deductionsDeleted);
+      mergeSalaryHistoryFromCloud(saved.salaryHistory, saved.salaryHistoryDeleted);
       localStorage.setItem('alazizi_lab', JSON.stringify(state));
       // Deduplicate doctors and orders by id
       state.doctors = state.doctors.filter(function(d,i,a){ return a.findIndex(function(x){ return x.id===d.id; })===i; });
@@ -7618,7 +7693,7 @@ function saveAdvance(){
   const list = loadAdvances();
   const deductLabel = deduct==='next'?'next salary':deduct==='split2'?'split over 2 months':'split over 3 months';
   const newId = uid()+Math.random().toString(36).slice(2,5);
-  list.push({id:newId,userId:empId,amount,note,date,deduct,deducted:false,createdAt:new Date().toISOString()});
+  list.push({id:newId,userId:empId,amount,note,date,deduct,deducted:false,createdAt:new Date().toISOString(),mtime:Date.now()});
   saveAdvancesStore(list);
   save();
   // Notification for the team
@@ -7636,6 +7711,7 @@ function markAdvanceDeducted(advId){
   if(idx<0) return;
   list[idx].deducted=true;
   list[idx].deductedDate=today();
+  list[idx].mtime=Date.now();
   saveAdvancesStore(list);
   save();
   const u = state.users.find(x=>x.id===list[idx].userId);
@@ -7656,21 +7732,30 @@ function renderAdvancesList(){
     el.innerHTML='<div style="padding:12px;text-align:center;color:var(--gray);font-size:.75rem">No advances recorded yet</div>';
     return;
   }
+  const isOwnerDed = currentUser && currentUser.role==='owner';
   el.innerHTML = all.slice(0,30).map(function(a){
     const emp = state.users.find(function(u){ return u.id===a.userId; });
     const isAdv = a._type==='advance';
     const deductLabel = a.deduct==='split2'?'Split 2m':a.deduct==='split3'?'Split 3m':'Next salary';
+    // Deductions: any user can mark one settled (paid out at the reduced
+    // amount), matching advances' ungated "Mark Deducted" — but editing or
+    // deleting a deduction is admin-only, per Moustafa's explicit request.
     const actionBtn = isAdv
       ? (a.deducted
           ? '<span style="font-size:.62rem;color:var(--green)">✅ Done '+(a.deductedDate||'')+'</span>'
           : '<button class="btn btn-ghost btn-sm" style="font-size:.62rem" onclick="markAdvanceDeducted(this.dataset.id)" data-id="'+a.id+'">✓ Mark Deducted</button>')
-      : '<span style="font-size:.62rem;color:#FF4C6A">✂️ Deducted</span>';
+      : (a.settled
+          ? '<span style="font-size:.62rem;color:var(--green)">✅ Settled '+(a.settledDate||'')+'</span>'
+          : '<button class="btn btn-ghost btn-sm" style="font-size:.62rem" onclick="markDeductionSettled(this.dataset.id)" data-id="'+a.id+'">✓ Mark Settled</button>')
+        +(isOwnerDed?'<button class="btn btn-ghost btn-sm" style="font-size:.62rem;padding:3px 6px" title="Edit" onclick="editDeduction(this.dataset.id)" data-id="'+a.id+'">✏️</button>'
+          +'<button class="btn btn-sm" style="font-size:.62rem;padding:3px 6px;background:rgba(255,76,106,.1);color:#FF4C6A;border:1px solid rgba(255,76,106,.2)" title="Delete" onclick="deleteDeduction(this.dataset.id)" data-id="'+a.id+'">🗑</button>':'');
     return '<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-bottom:1px solid var(--border)">'
       +'<div>'
       +'<strong style="font-size:.78rem;color:var(--navy)">'+(emp?emp.name:'Unknown')+'</strong>'
       +(isAdv?'<span style="font-size:.6rem;padding:1px 6px;border-radius:10px;background:rgba(245,158,11,.1);color:var(--gold);margin-left:4px">💸 Advance</span>':'<span style="font-size:.6rem;padding:1px 6px;border-radius:10px;background:rgba(255,76,106,.1);color:#FF4C6A;margin-left:4px">✂️ Deduction</span>')
       +'<div style="font-size:.65rem;color:var(--gray)">'+(a.date||'')+(a.note?' · '+a.note:'')+'</div>'
       +(isAdv?'<div style="font-size:.62rem;color:var(--cyan)">Deduct: '+deductLabel+'</div>':'')
+      +(a.editedAt?'<div style="font-size:.6rem;color:var(--gold)">✏️ edited '+a.editedAt+'</div>':'')
       +'</div>'
       +'<div style="display:flex;align-items:center;gap:6px">'
       +'<strong style="color:'+(isAdv?'var(--gold)':'#FF4C6A')+';font-size:.82rem">'+fmt(a.amount)+' EGP</strong>'
@@ -7689,7 +7774,8 @@ function openSalaryStatement(userId){
   const totalDeds=deds.reduce(function(s,d){ return s+Number(d.amount||0); },0);
   const totalPaid=hist.reduce(function(s,h){ return s+Number(h.amount||0); },0);
   const pendAdv=advs.filter(function(a){ return !a.deducted; }).reduce(function(s,a){ return s+Number(a.amount||0); },0);
-  const netNext=Math.max(0,Number(u.salary||0)-pendAdv);
+  const pendDed=deds.filter(function(d){ return !d.settled; }).reduce(function(s,d){ return s+Number(d.amount||0); },0);
+  const netNext=Math.max(0,Number(u.salary||0)-pendAdv-pendDed);
 
   document.getElementById('stmt-name').textContent=u.name;
 
@@ -7708,15 +7794,23 @@ function openSalaryStatement(userId){
       +'<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:right;font-size:.7rem;font-weight:600;color:var(--green)">'+fmt(h.amount)+' EGP</td></tr>';
   }).join('');
 
+  var dedRows = deds.map(function(d,i){
+    return '<tr style="'+(i%2?'background:rgba(0,0,0,.02)':'')+'"><td style="padding:5px 8px;border-bottom:1px solid var(--border);font-size:.68rem">'+(d.date||'—')+'</td>'
+      +'<td style="padding:5px 8px;border-bottom:1px solid var(--border);font-size:.68rem">'+(d.note||'—')+'</td>'
+      +'<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:right;font-size:.68rem;font-weight:600;color:#FF4C6A">'+fmt(d.amount)+' EGP</td>'
+      +'<td style="padding:5px 8px;border-bottom:1px solid var(--border);text-align:center;font-size:.62rem">'+(d.settled?'<span style="color:var(--green)">✅</span>':'<span style="color:var(--gold)">⏳</span>')+'</td></tr>';
+  }).join('');
+
   document.getElementById('salary-statement-preview').innerHTML =
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid var(--navy)">'
     +'<div><div style="font-weight:800;font-size:.95rem;color:var(--navy)">'+u.name+'</div>'
     +'<div style="font-size:.7rem;color:var(--gray);margin-top:2px">'+u.role+' · '+new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div></div>'
     +'<div style="text-align:right"><div style="font-size:.65rem;color:var(--gray)">Monthly Salary</div>'
     +'<div style="font-weight:800;font-size:1rem;color:var(--navy)">'+fmt(u.salary||0)+' EGP</div></div></div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:16px">'
     +'<div style="text-align:center;padding:8px;background:#fff;border-radius:8px;border:1px solid var(--border)"><div style="font-size:.58rem;color:var(--gray);margin-bottom:2px">Total Paid</div><div style="font-weight:700;font-size:.85rem;color:var(--green)">'+fmt(totalPaid)+' EGP</div></div>'
     +'<div style="text-align:center;padding:8px;background:#fff;border-radius:8px;border:1px solid var(--border)"><div style="font-size:.58rem;color:var(--gray);margin-bottom:2px">Advances Owed</div><div style="font-weight:700;font-size:.85rem;color:var(--gold)">'+fmt(pendAdv)+' EGP</div></div>'
+    +'<div style="text-align:center;padding:8px;background:#fff;border-radius:8px;border:1px solid var(--border)"><div style="font-size:.58rem;color:var(--gray);margin-bottom:2px">Deductions Owed</div><div style="font-weight:700;font-size:.85rem;color:#FF4C6A">'+fmt(pendDed)+' EGP</div></div>'
     +'<div style="text-align:center;padding:8px;background:#fff;border-radius:8px;border:1px solid var(--border)"><div style="font-size:.58rem;color:var(--gray);margin-bottom:2px">Net Next Salary</div><div style="font-weight:700;font-size:.85rem;color:'+(netNext<Number(u.salary||0)?'#FF4C6A':'var(--navy)')+'">'+fmt(netNext)+' EGP</div></div>'
     +'</div>'
     +(advs.length?'<div style="margin-bottom:14px"><div style="font-size:.62rem;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Advances</div>'
@@ -7727,6 +7821,13 @@ function openSalaryStatement(userId){
     +'<th style="padding:5px 8px;text-align:right;font-size:.58rem;color:var(--gray)">Amount</th>'
     +'<th style="padding:5px 8px;text-align:center;font-size:.58rem;color:var(--gray)">Status</th>'
     +'</tr></thead><tbody>'+advRows+'</tbody></table></div>':'')
+    +(deds.length?'<div style="margin-bottom:14px"><div style="font-size:.62rem;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Deductions</div>'
+    +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--off)">'
+    +'<th style="padding:5px 8px;text-align:left;font-size:.58rem;color:var(--gray)">Date</th>'
+    +'<th style="padding:5px 8px;text-align:left;font-size:.58rem;color:var(--gray)">Reason</th>'
+    +'<th style="padding:5px 8px;text-align:right;font-size:.58rem;color:var(--gray)">Amount</th>'
+    +'<th style="padding:5px 8px;text-align:center;font-size:.58rem;color:var(--gray)">Status</th>'
+    +'</tr></thead><tbody>'+dedRows+'</tbody></table></div>':'')
     +(hist.length?'<div><div style="font-size:.62rem;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Salary Payments</div>'
     +'<table style="width:100%;border-collapse:collapse"><thead><tr style="background:var(--off)">'
     +'<th style="padding:5px 8px;text-align:left;font-size:.58rem;color:var(--gray)">Month</th>'
@@ -7743,9 +7844,14 @@ function copySalaryStatement(){
   if(!u) return;
   const adv=loadAdvances().filter(function(a){ return a.userId===u.id&&!a.deducted; });
   const totalAdv=adv.reduce(function(s,a){ return s+Number(a.amount||0); },0);
+  const ded=loadDeductions().filter(function(d){ return d.userId===u.id&&!d.settled; });
+  const totalDed=ded.reduce(function(s,d){ return s+Number(d.amount||0); },0);
   var lines=['Salary Statement - '+u.name,'Monthly Salary: '+fmt(u.salary||0)+' EGP'];
-  if(totalAdv>0){ lines.push('Advances Owed: '+fmt(totalAdv)+' EGP'); lines.push('Net Next Salary: '+fmt(Math.max(0,(u.salary||0)-totalAdv))+' EGP'); }
+  if(totalAdv>0) lines.push('Advances Owed: '+fmt(totalAdv)+' EGP');
+  if(totalDed>0) lines.push('Deductions Owed: '+fmt(totalDed)+' EGP');
+  if(totalAdv>0||totalDed>0) lines.push('Net Next Salary: '+fmt(Math.max(0,(u.salary||0)-totalAdv-totalDed))+' EGP');
   if(adv.length){ lines.push(''); lines.push('Advances:'); adv.forEach(function(a){ lines.push('- '+a.date+' - '+a.note+' - '+fmt(a.amount)+' EGP'); }); }
+  if(ded.length){ lines.push(''); lines.push('Deductions:'); ded.forEach(function(d){ lines.push('- '+d.date+' - '+d.note+' - '+fmt(d.amount)+' EGP'); }); }
   var t=lines.join('\n');
   if(navigator.clipboard){ navigator.clipboard.writeText(t).then(function(){ showToast('Copied','done'); }); }
 }
@@ -7755,8 +7861,21 @@ function loadDeductions(){
   try{ return JSON.parse(localStorage.getItem('alazizi_deductions')||'[]'); }catch(e){ return []; }
 }
 function saveDeductionsStore(d){ localStorage.setItem('alazizi_deductions',JSON.stringify(d)); }
+// Unsettled deductions still reduce this period's payable salary — see
+// renderSalaries()/updatePaySalaryAmount(). markDeductionSettled() clears one
+// once it's actually been paid out at a reduced amount, same lifecycle as
+// advances' deducted/markAdvanceDeducted().
+function unsettledDeductionsTotal(userId){
+  return loadDeductions().filter(function(d){ return d.userId===userId && !d.settled; })
+    .reduce(function(s,d){ return s+Number(d.amount||0); },0);
+}
+
+let editingDeductionId = null;
 
 function openDeductionModal(userId){
+  editingDeductionId = null;
+  document.getElementById('deduction-modal-title').textContent = 'Record Deduction';
+  document.getElementById('ded-confirm-btn').textContent = 'Record Deduction';
   const sel = document.getElementById('ded-employee');
   sel.innerHTML = state.users.filter(u=>u.salary>0).map(u=>'<option value="'+u.id+'">'+u.name+'</option>').join('');
   if(userId) sel.value = userId;
@@ -7767,6 +7886,27 @@ function openDeductionModal(userId){
   updateDeductionInfo();
   toggleDeductionReason();
   openModal('deduction-modal');
+}
+
+// Admin-only: correct a deduction that was logged wrong (amount/date/reason).
+function editDeduction(id){
+  if(!(currentUser && currentUser.role==='owner')){ alert('Only the admin can edit deductions.'); return; }
+  const ded = loadDeductions().find(function(d){ return d.id===id; });
+  if(!ded){ alert('Deduction not found.'); return; }
+  openDeductionModal(ded.userId);
+  editingDeductionId = id;
+  document.getElementById('deduction-modal-title').textContent = 'Edit Deduction';
+  document.getElementById('ded-confirm-btn').textContent = 'Save Changes';
+  document.getElementById('ded-reason-type').value = ded.type||'other';
+  document.getElementById('ded-amount').value = ded.amount||0;
+  document.getElementById('ded-date').value   = ded.date||today();
+  document.getElementById('ded-note').value   = ded.note||'';
+  toggleDeductionReason();
+  updateDeductionInfo();
+  if(ded.type==='advance' && ded.advId){
+    var advSel=document.getElementById('ded-advance-select');
+    if(advSel) advSel.value = ded.advId;
+  }
 }
 
 function updateDeductionInfo(){
@@ -7824,6 +7964,22 @@ function saveDeduction(){
 
   const u = state.users.find(x=>x.id===empId);
 
+  if(editingDeductionId){
+    if(!(currentUser && currentUser.role==='owner')){ alert('Only the admin can edit deductions.'); return; }
+    const deds = loadDeductions();
+    const rec  = deds.find(function(d){ return d.id===editingDeductionId; });
+    if(!rec){ alert('Deduction not found.'); editingDeductionId=null; return; }
+    rec.userId=empId; rec.amount=amount; rec.date=date; rec.type=type; rec.note=note; rec.advId=advId||'';
+    rec.editedAt=today(); rec.editedBy=currentUser.name; rec.mtime=Date.now();
+    saveDeductionsStore(deds);
+    save();
+    addNotif('info', '✂️ Deduction Edited — '+(u?u.name:''), fmt(amount)+' EGP');
+    editingDeductionId = null;
+    closeModal('deduction-modal');
+    renderSalaries();
+    return;
+  }
+
   // If deducting from an advance, mark it as deducted
   if(type==='advance' && advId){
     const advList = loadAdvances();
@@ -7835,9 +7991,10 @@ function saveDeduction(){
     }
   }
 
-  // Record deduction
+  // Record deduction — starts unsettled so it reduces this period's Net
+  // Salary / Pay Salary default amount until markDeductionSettled() clears it.
   const deds = loadDeductions();
-  deds.push({ id:uid()+Math.random().toString(36).slice(2,5), userId:empId, amount, date, type, note, advId:advId||'', createdAt:new Date().toISOString() });
+  deds.push({ id:uid()+Math.random().toString(36).slice(2,5), userId:empId, amount, date, type, note, advId:advId||'', settled:false, createdAt:new Date().toISOString(), mtime:Date.now() });
   saveDeductionsStore(deds);
   save();
 
@@ -7849,6 +8006,44 @@ function saveDeduction(){
   );
 
   closeModal('deduction-modal');
+  renderSalaries();
+}
+
+// Mark a deduction as actually applied/paid out — mirrors markAdvanceDeducted().
+// Not admin-gated, same as that function, since it's a lightweight "this was
+// paid at the reduced amount" acknowledgement rather than a destructive edit.
+function markDeductionSettled(id){
+  const deds = loadDeductions();
+  const idx  = deds.findIndex(function(d){ return d.id===id; });
+  if(idx<0) return;
+  deds[idx].settled = true;
+  deds[idx].settledDate = today();
+  deds[idx].mtime = Date.now();
+  saveDeductionsStore(deds);
+  save();
+  const u = state.users.find(function(x){ return x.id===deds[idx].userId; });
+  addNotif('paid', '✅ Deduction Settled — '+(u?u.name:''), fmt(deds[idx].amount)+' EGP applied to salary');
+  renderSalaries();
+}
+
+// Admin-only, per Moustafa's explicit request — reverses the linked advance's
+// deducted flag back to outstanding so the money isn't silently lost, same
+// care as deleteOrder()'s allocation reversal.
+function deleteDeduction(id){
+  if(!(currentUser && currentUser.role==='owner')){ alert('Only the admin can delete deductions.'); return; }
+  const deds = loadDeductions();
+  const ded  = deds.find(function(d){ return d.id===id; });
+  if(!ded) return;
+  if(!confirm('Delete this deduction of '+fmt(ded.amount)+' EGP?'+(ded.type==='advance'&&ded.advId?' The linked advance will go back to outstanding.':''))) return;
+  if(ded.type==='advance' && ded.advId){
+    const advList = loadAdvances();
+    const advIdx  = advList.findIndex(function(a){ return a.id===ded.advId; });
+    if(advIdx>=0){ advList[advIdx].deducted=false; advList[advIdx].deductedDate=''; saveAdvancesStore(advList); }
+  }
+  saveDeductionsStore(deds.filter(function(d){ return d.id!==id; }));
+  save();
+  const u = state.users.find(function(x){ return x.id===ded.userId; });
+  addNotif('cancelled', 'Deduction Deleted — '+(u?u.name:''), fmt(ded.amount)+' EGP reversed');
   renderSalaries();
 }
 
