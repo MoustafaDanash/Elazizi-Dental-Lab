@@ -8040,6 +8040,7 @@ function deleteDeduction(id){
     const advIdx  = advList.findIndex(function(a){ return a.id===ded.advId; });
     if(advIdx>=0){ advList[advIdx].deducted=false; advList[advIdx].deductedDate=''; saveAdvancesStore(advList); }
   }
+  var _t=loadDeductionTombstones(); if(_t.indexOf(id)<0){ _t.push(id); saveDeductionTombstones(_t); }
   saveDeductionsStore(deds.filter(function(d){ return d.id!==id; }));
   save();
   const u = state.users.find(function(x){ return x.id===ded.userId; });
