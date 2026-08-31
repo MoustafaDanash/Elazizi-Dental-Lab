@@ -5518,8 +5518,22 @@ function saveDoctor(){
     if(!state.orders) state.orders=[];
     const obIdx = state.orders.findIndex(o=>o.doctor===data.name && o.service==='Opening Balance');
     if(obIdx>=0){
-      if(prevBal>0){ state.orders[obIdx].price=prevBal; }
-      else { state.orders.splice(obIdx,1); }
+      if(prevBal>0){
+        state.orders[obIdx].price=prevBal;
+        state.orders[obIdx].mtime=Date.now();
+      } else {
+        // Zeroing the Previous Balance field removes the Opening Balance order —
+        // must go through the same path deleteOrder() uses (reallocate any
+        // payment already applied to it, then tombstone) or the removal has no
+        // durable record: the next cloud merge/refresh silently brings the
+        // order back, and any payment allocation pointing at it is left
+        // dangling. A plain splice() here was the root cause of "deleting the
+        // Due Amount from June line doesn't stick" (2026-08-31).
+        var obVictim = state.orders[obIdx];
+        releaseAllocationsForOrder(obVictim.id, obVictim, true);
+        var _obT=loadOrderTombstones(); if(_obT.indexOf(obVictim.id)<0){ _obT.push(obVictim.id); saveOrderTombstones(_obT); }
+        state.orders.splice(obIdx,1);
+      }
     } else if(prevBal>0){
       state.orders.unshift({
         id:uid(), orderNum:(state.nextOrderId||1), doctor:data.name,
